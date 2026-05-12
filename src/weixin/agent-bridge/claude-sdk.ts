@@ -47,6 +47,21 @@ async function loadAgentSdk(): Promise<ClaudeAgentSdkModule | null> {
  * so the agent decides natively how to consume each path (vision, PDF reader,
  * Read tool for office docs, etc.).
  */
+/**
+ * Collect the unique parent directories of all inbound file paths so they can
+ * be granted to claude-code via `additionalDirectories`. Without this the Read
+ * tool refuses to open files outside the session cwd.
+ */
+function collectFileDirectories(files: CliBackendFile[]): string[] {
+  const seen = new Set<string>();
+  for (const f of files) {
+    if (!f.path) continue;
+    const dir = path.dirname(path.resolve(f.path));
+    if (dir && !seen.has(dir)) seen.add(dir);
+  }
+  return Array.from(seen);
+}
+
 export function renderCliPrompt(text: string, files: CliBackendFile[]): string {
   const lines: string[] = [];
   const body = text.trim();
@@ -138,12 +153,21 @@ async function* runQuery(
   const env: Record<string, string | undefined> = { ...process.env };
   if (cfg.anthropicApiKey) env.ANTHROPIC_API_KEY = cfg.anthropicApiKey;
 
+  // Grant the agent read access to every directory that holds an inbound file
+  // — claude-code restricts Read tool to cwd by default, so files dropped by
+  // media-download.ts under os.tmpdir() would otherwise be unreachable.
+  const additionalDirectories = collectFileDirectories(input.files);
+
   const options: Record<string, unknown> = {
     abortController,
     env,
   };
+  if (additionalDirectories.length > 0) options.additionalDirectories = additionalDirectories;
   if (cfg.model) options.model = cfg.model;
   if (cfg.extraSystemPrompt) options.systemPrompt = cfg.extraSystemPrompt;
+  if (cfg.binaryPath && cfg.binaryPath !== "claude") {
+    options.pathToClaudeCodeExecutable = cfg.binaryPath;
+  }
   if (!session.created && session.record.sessionId) {
     options.resume = session.record.sessionId;
   }
@@ -153,6 +177,7 @@ async function* runQuery(
   );
 
   let observedSessionId: string | undefined;
+  let assistantTextSeen = false;
   try {
     const stream = sdk.query({ prompt, options });
     for await (const raw of stream) {
@@ -170,7 +195,10 @@ async function* runQuery(
             ? (msg.message as Record<string, unknown>)
             : undefined;
         const chunk = coerceTextFromContent(apiMessage?.content ?? msg.content);
-        if (chunk) yield { kind: "text", chunk };
+        if (chunk) {
+          assistantTextSeen = true;
+          yield { kind: "text", chunk };
+        }
         for (const att of extractAttachments(msg)) {
           yield { kind: "file", path: att.path, mimeType: att.mimeType, fileName: att.fileName, caption: att.caption };
         }
@@ -178,8 +206,12 @@ async function* runQuery(
       }
 
       if (type === "result") {
-        const resultText = typeof msg.result === "string" ? msg.result : "";
-        if (resultText) yield { kind: "text", chunk: resultText };
+        // Result message is a summary; only use its text if no assistant text was
+        // streamed (e.g. non-streaming providers or test mocks).
+        if (!assistantTextSeen) {
+          const resultText = typeof msg.result === "string" ? msg.result : "";
+          if (resultText) yield { kind: "text", chunk: resultText };
+        }
         for (const att of extractAttachments(msg)) {
           yield { kind: "file", path: att.path, mimeType: att.mimeType, fileName: att.fileName, caption: att.caption };
         }
