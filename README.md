@@ -62,9 +62,25 @@ First-install note:
 
 ## Config Contract
 
-Plugin-level relay and proxy settings stay under `plugins.entries.clawbnb-hub.config`:
+### Minimal "just works" setup
 
-```json
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...        # or OPENAI_API_KEY for codex
+npm install
+openclaw plugins install .
+```
+
+The plugin defaults to `agent.backend = "cli"`, `agent.cli = "claude"`, and
+reads the API key from the environment, so no extra config keys are required
+under `plugins.entries.clawbnb-hub.config`. WeChat inbound text + files are
+forwarded as-is to a claude-code (or codex) session; the CLI handles vision,
+PDF, document parsing natively.
+
+### Full config schema
+
+Plugin-level settings stay under `plugins.entries.clawbnb-hub.config`:
+
+```jsonc
 {
   "plugins": {
     "entries": {
@@ -72,6 +88,26 @@ Plugin-level relay and proxy settings stay under `plugins.entries.clawbnb-hub.co
         "enabled": true,
         "config": {
           "hostModelControl": "inherit",
+          "agent": {
+            "backend": "cli",            // "cli" (default) | "pi-ai" (legacy rental path)
+            "cli": "claude",             // "claude" (default) | "codex"
+            "sessionTimeoutMs": 600000,  // idle TTL for per-(account,user) CLI sessions
+            "maxOutboundFiles": 8,       // safety cap on files the agent can emit per turn
+            "claude": {
+              "useAgentSdk": true,
+              "binaryPath": "claude",            // path to an authenticated `claude` binary
+              "model": "",                       // empty = SDK default
+              "extraSystemPrompt": "",
+              "anthropicApiKey": ""              // empty = read $ANTHROPIC_API_KEY
+            },
+            "codex": {
+              "binaryPath": "codex",
+              "openaiApiKey": ""                 // empty = read $OPENAI_API_KEY
+            }
+          },
+
+          // Optional legacy rental-relay fields (only when running the
+          // marketplace integration; safe to omit for the WeChat-only path).
           "apiKey": "YOUR_AGENT_API_KEY",
           "relayUrl": "ws://127.0.0.1:8787/ws/rental?role=plugin",
           "proxyBaseUrl": "http://127.0.0.1:8787/api/rental-proxy"
@@ -86,6 +122,16 @@ Plugin-level relay and proxy settings stay under `plugins.entries.clawbnb-hub.co
 
 - `inherit` (default): do not rewrite the host OpenClaw model/provider config; use whatever local model stack the Gateway already has
 - `proxy`: explicitly rewrite the host config to use the `molt-proxy` provider; requires an explicit `proxyBaseUrl`
+
+`agent.backend` modes:
+
+- `cli` (default): forward inbound text + decrypted file paths to the configured
+  CLI (`claude-code` or `codex`). The plugin acts as a pure messenger — the CLI
+  decides natively how to read images / PDFs / Office files. Rental sessions
+  (any `sessionKey` prefixed with `clawbnb-hub:`) bypass this fork and still
+  flow through the legacy dispatcher.
+- `pi-ai`: original path; routes via OpenClaw's `dispatchReplyFromConfig` and
+  the `molt-proxy` provider. Retained for the rental-relay use case.
 
 Upgrade note:
 
