@@ -74,6 +74,47 @@
       },
       "extraSystemPrompt": {
         "type": "string"
+      },
+      "agent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": ["cli", "pi-ai"]
+          },
+          "cli": {
+            "type": "string",
+            "enum": ["claude", "codex"]
+          },
+          "claude": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "useAgentSdk": { "type": "boolean" },
+              "binaryPath": { "type": "string" },
+              "model": { "type": "string" },
+              "extraSystemPrompt": { "type": "string" },
+              "anthropicApiKey": { "type": "string" }
+            }
+          },
+          "codex": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "binaryPath": { "type": "string" },
+              "openaiApiKey": { "type": "string" }
+            }
+          },
+          "sessionTimeoutMs": {
+            "type": "integer",
+            "minimum": 5000
+          },
+          "maxOutboundFiles": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       }
     }
   }

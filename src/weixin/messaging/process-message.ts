@@ -18,7 +18,7 @@ import {
   getContextTokenFromMsgContext,
   isMediaItem,
 } from "./inbound.js";
-import type { WeixinInboundMediaOpts } from "./inbound.js";
+import type { WeixinInboundMediaOpts, WeixinMsgContext } from "./inbound.js";
 import {
   createTypingCallbacks,
   resolveDirectDmAuthorizationOutcome,
@@ -27,6 +27,9 @@ import {
 import { sendWeixinMediaFile } from "./send-media.js";
 import { markdownToPlainText, sendMessageWeixin } from "./send.js";
 import { handleSlashCommand } from "./slash-commands.js";
+import { runCliTurnAndDeliver } from "../agent-bridge/deliver.js";
+import { resolveMoltMarketConfigFromOpenClawConfig } from "../../config.js";
+import { isMoltMarketSessionKey } from "../../contracts.js";
 
 let preferredTmpDirResolver: (() => string) | null = null;
 let preferredTmpDirResolved = false;
@@ -444,22 +447,46 @@ export async function processOneMessage(
       },
     });
 
-  logger.debug(`dispatchReplyFromConfig: starting agentId=${route.agentId ?? "(none)"}`);
+  const moltConfig = resolveMoltMarketConfigFromOpenClawConfig(deps.config);
+  const isRentalSession = isMoltMarketSessionKey(route.sessionKey);
+  const useCliBackend = moltConfig.agent.backend === "cli" && !isRentalSession;
+
+  logger.debug(
+    `dispatch: backend=${useCliBackend ? "cli" : "pi-ai"} cli=${moltConfig.agent.cli} agentId=${route.agentId ?? "(none)"} rentalSession=${String(isRentalSession)}`,
+  );
+
   try {
-    await deps.channelRuntime.reply.withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        deps.channelRuntime.reply.dispatchReplyFromConfig({
-          ctx: finalized,
-          cfg: deps.config,
-          dispatcher,
-          replyOptions,
-        }),
-    });
-    logger.debug(`dispatchReplyFromConfig: done agentId=${route.agentId ?? "(none)"}`);
+    if (useCliBackend) {
+      await runCliTurnAndDeliver({
+        ctx: finalized as WeixinMsgContext,
+        cfg: moltConfig.agent,
+        deps: {
+          accountId: deps.accountId,
+          baseUrl: deps.baseUrl,
+          cdnBaseUrl: deps.cdnBaseUrl,
+          token: deps.token,
+          contextToken,
+          log: deps.log,
+          errLog: deps.errLog,
+        },
+      });
+      logger.debug(`cli backend: done scope=${deps.accountId}:${finalized.From}`);
+    } else {
+      await deps.channelRuntime.reply.withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          deps.channelRuntime.reply.dispatchReplyFromConfig({
+            ctx: finalized,
+            cfg: deps.config,
+            dispatcher,
+            replyOptions,
+          }),
+      });
+      logger.debug(`dispatchReplyFromConfig: done agentId=${route.agentId ?? "(none)"}`);
+    }
   } catch (err) {
     logger.error(
-      `dispatchReplyFromConfig: error agentId=${route.agentId ?? "(none)"} err=${String(err)}`,
+      `dispatch: error backend=${useCliBackend ? "cli" : "pi-ai"} agentId=${route.agentId ?? "(none)"} err=${String(err)}`,
     );
     throw err;
   } finally {

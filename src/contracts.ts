@@ -15,6 +15,15 @@ export const DEFAULT_TEMP_ROOT = "/tmp/molt-rental";
 export const DEFAULT_TOOL_REFUSAL_TEXT =
   "Tool access is disabled in rental sessions. Reply with plain text only.";
 
+export const DEFAULT_AGENT_BACKEND: AgentBackend = "cli";
+export const DEFAULT_AGENT_CLI: AgentCli = "claude";
+export const DEFAULT_AGENT_SESSION_TIMEOUT_MS = 600_000;
+export const DEFAULT_AGENT_MAX_OUTBOUND_FILES = 8;
+export const DEFAULT_CODEX_BINARY = "codex";
+
+export type AgentBackend = "cli" | "pi-ai";
+export type AgentCli = "claude" | "codex";
+
 export type HostModelControlMode = "inherit" | "proxy";
 
 export type PresenceStatus = "offline" | "online" | "available" | "busy" | "interrupted";

@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 import {
+  DEFAULT_AGENT_BACKEND,
+  DEFAULT_AGENT_CLI,
+  DEFAULT_AGENT_MAX_OUTBOUND_FILES,
+  DEFAULT_AGENT_SESSION_TIMEOUT_MS,
+  DEFAULT_CODEX_BINARY,
   DEFAULT_HOST_MODEL_CONTROL,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_PROXY_MODEL_ID,
@@ -9,11 +14,35 @@ import {
   DEFAULT_RUN_TIMEOUT_MS,
   DEFAULT_TEMP_ROOT,
   DEFAULT_TOOL_REFUSAL_TEXT,
+  type AgentBackend,
+  type AgentCli,
   type HostModelControlMode,
   MOLT_MARKET_PLUGIN_ID,
   MOLT_PROXY_PLACEHOLDER_API_KEY,
   MOLT_PROXY_PROVIDER_ID,
 } from "./contracts.js";
+
+export type ResolvedAgentClaudeConfig = {
+  useAgentSdk: boolean;
+  binaryPath: string;
+  model: string;
+  extraSystemPrompt: string;
+  anthropicApiKey: string;
+};
+
+export type ResolvedAgentCodexConfig = {
+  binaryPath: string;
+  openaiApiKey: string;
+};
+
+export type ResolvedAgentConfig = {
+  backend: AgentBackend;
+  cli: AgentCli;
+  sessionTimeoutMs: number;
+  maxOutboundFiles: number;
+  claude: ResolvedAgentClaudeConfig;
+  codex: ResolvedAgentCodexConfig;
+};
 
 export type ResolvedMoltMarketConfig = {
   enabled: boolean;
@@ -32,6 +61,7 @@ export type ResolvedMoltMarketConfig = {
   tempRoot: string;
   toolRefusalText: string;
   extraSystemPrompt: string;
+  agent: ResolvedAgentConfig;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -58,6 +88,57 @@ function asPositiveInt(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(1, Math.floor(value));
+}
+
+function asNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeAgentBackend(value: unknown): AgentBackend {
+  return value === "pi-ai" ? "pi-ai" : DEFAULT_AGENT_BACKEND;
+}
+
+function normalizeAgentCli(value: unknown): AgentCli {
+  return value === "codex" ? "codex" : DEFAULT_AGENT_CLI;
+}
+
+function resolveAgentConfig(raw: unknown): ResolvedAgentConfig {
+  const record = asRecord(raw);
+  const claudeRaw = asRecord(record.claude);
+  const codexRaw = asRecord(record.codex);
+  const envAnthropic =
+    process.env.ANTHROPIC_API_KEY?.trim() || process.env.CLAUDE_API_KEY?.trim() || "";
+  const envOpenAi = process.env.OPENAI_API_KEY?.trim() || "";
+  return {
+    backend: normalizeAgentBackend(record.backend),
+    cli: normalizeAgentCli(record.cli),
+    sessionTimeoutMs: Math.max(
+      5_000,
+      asPositiveInt(record.sessionTimeoutMs, DEFAULT_AGENT_SESSION_TIMEOUT_MS),
+    ),
+    maxOutboundFiles: asNonNegativeInt(
+      record.maxOutboundFiles,
+      DEFAULT_AGENT_MAX_OUTBOUND_FILES,
+    ),
+    claude: {
+      useAgentSdk: asBoolean(claudeRaw.useAgentSdk, true),
+      binaryPath: asTrimmedString(claudeRaw.binaryPath, "claude"),
+      model: asTrimmedString(claudeRaw.model),
+      extraSystemPrompt: asTrimmedString(claudeRaw.extraSystemPrompt),
+      anthropicApiKey: asTrimmedString(claudeRaw.anthropicApiKey, envAnthropic),
+    },
+    codex: {
+      binaryPath: asTrimmedString(codexRaw.binaryPath, DEFAULT_CODEX_BINARY),
+      openaiApiKey: asTrimmedString(codexRaw.openaiApiKey, envOpenAi),
+    },
+  };
 }
 
 function normalizeProxyBaseUrl(value: unknown): string {
@@ -109,6 +190,7 @@ export function resolveMoltMarketConfig(raw: unknown): ResolvedMoltMarketConfig 
     tempRoot: asTrimmedString(record.tempRoot, DEFAULT_TEMP_ROOT),
     toolRefusalText: asTrimmedString(record.toolRefusalText, DEFAULT_TOOL_REFUSAL_TEXT),
     extraSystemPrompt: asTrimmedString(record.extraSystemPrompt),
+    agent: resolveAgentConfig(record.agent),
   };
 }
 
