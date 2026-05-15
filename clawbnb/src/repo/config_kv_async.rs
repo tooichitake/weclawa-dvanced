@@ -1,7 +1,4 @@
-//! AsyncConfigKvRepo — v4.1 K1 sqlx 版本。
-//!
-//! 跟 [`crate::repo::config_kv::SqliteConfigKvRepo`] 接口对等的 async impl。
-//! 用法跟其他 `*_async` repo 一样。
+//! AsyncConfigKvRepo — v7.0 JSONB + TIMESTAMPTZ.
 
 use chrono::Utc;
 use serde_json::Value;
@@ -19,21 +16,16 @@ impl SqlxConfigKvRepo {
     }
 
     pub async fn get(&self, key: &str) -> Result<Option<Value>, DbError> {
-        let row: Option<(String,)> =
+        let row: Option<(Value,)> =
             sqlx::query_as("SELECT value_json FROM config_kv WHERE key = $1")
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| DbError::Pool(format!("sqlx config_kv get: {e}")))?;
-        Ok(match row {
-            Some((s,)) => Some(serde_json::from_str(&s)?),
-            None => None,
-        })
+        Ok(row.map(|(v,)| v))
     }
 
     pub async fn set(&self, key: &str, value: &Value) -> Result<(), DbError> {
-        let json = serde_json::to_string(value)?;
-        let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO config_kv (key, value_json, updated_at)
              VALUES ($1, $2, $3)
@@ -42,8 +34,8 @@ impl SqlxConfigKvRepo {
                  updated_at = excluded.updated_at",
         )
         .bind(key)
-        .bind(&json)
-        .bind(&now)
+        .bind(value)
+        .bind(Utc::now())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx config_kv set: {e}")))?;
@@ -60,16 +52,12 @@ impl SqlxConfigKvRepo {
     }
 
     pub async fn list(&self) -> Result<Vec<(String, Value)>, DbError> {
-        let rows: Vec<(String, String)> =
+        let rows: Vec<(String, Value)> =
             sqlx::query_as("SELECT key, value_json FROM config_kv ORDER BY key ASC")
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| DbError::Pool(format!("sqlx config_kv list: {e}")))?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (k, json) in rows {
-            out.push((k, serde_json::from_str(&json)?));
-        }
-        Ok(out)
+        Ok(rows)
     }
 }
 

@@ -110,9 +110,12 @@ pub async fn apply_migrations(pool: &AsyncDbPool) -> Result<(), DbError> {
         pool.execute(*sql)
             .await
             .map_err(|e| DbError::Migration(format!("apply {name}: {e}")))?;
+        // v7.0: applied_at column starts TEXT (V0001 schema), becomes
+        // TIMESTAMPTZ after V0012. sqlx binds chrono::DateTime<Utc> to
+        // either correctly (TEXT cast: ISO 8601; TIMESTAMPTZ: native).
         sqlx::query("INSERT INTO _sqlx_migrations (version, applied_at) VALUES ($1, $2)")
             .bind(*name)
-            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now())
             .execute(pool)
             .await
             .map_err(|e| DbError::Migration(format!("record {name}: {e}")))?;
@@ -161,6 +164,18 @@ const MIGRATION_FILES: &[(&str, &str)] = &[
         "V0009__account_platform.sql",
         include_str!("migrations/V0009__account_platform.sql"),
     ),
+    (
+        "V0010__jsonb.sql",
+        include_str!("migrations/V0010__jsonb.sql"),
+    ),
+    (
+        "V0011__uuid.sql",
+        include_str!("migrations/V0011__uuid.sql"),
+    ),
+    (
+        "V0012__timestamptz.sql",
+        include_str!("migrations/V0012__timestamptz.sql"),
+    ),
 ];
 
 // --- Process-global async pool handle --------------------------------------
@@ -179,56 +194,105 @@ pub fn try_global_async_pool() -> Option<AsyncDbPool> {
     GLOBAL_ASYNC_POOL.get().cloned()
 }
 
-/// Test helper: connect to a **separate** test-database, wiping it on
-/// each call to give each test a fresh schema. Approximates SQLite's
-/// `:memory:` per-call freshness.
+/// v7.0 — per-test isolated PG via `testcontainers`. Each call:
+///   1. Reuses a process-global postgres:16 container (started lazily on
+///      first call, kept alive for the rest of the process).
+///   2. Creates a fresh database with a random name (`t_<uuid>`).
+///   3. Connects + applies all migrations.
+///   4. Returns the pool. Caller's `Drop` disconnects; the DB stays in the
+///      container until process exit (cheap; tens of MB total per run).
 ///
-/// Critical safety: this function REFUSES to operate against the
-/// daemon's production DB. The DSN's database name must end in
-/// `_test` (e.g., `weclawbot_test`) — guards against tests
-/// accidentally wiping live data. CI sets `POSTGRES_DB=weclawbot_test`.
+/// Tests can run in parallel (default `cargo test` behavior) because each
+/// gets its own DB. The `--test-threads=1` workaround from v5.6 is gone.
 ///
-/// For local dev, create the test DB once:
-/// ```sh
-/// podman exec weclawbot-pg createdb -U weclawbot weclawbot_test
-/// ```
-///
-/// Then run tests with:
-/// ```sh
-/// export DATABASE_URL='postgres://weclawbot:weclawbot-local@127.0.0.1:5432/weclawbot_test'
-/// cargo test --release -- --test-threads=1
-/// ```
+/// Requires Docker (or podman with the docker socket bridge) on the
+/// runner. CI's Ubuntu image has Docker pre-installed; WSL devs need
+/// `podman system service --time 0 unix:///tmp/podman.sock` exposed as
+/// `DOCKER_HOST=unix:///tmp/podman.sock` (one-time setup).
 #[cfg(test)]
 pub async fn open_in_memory() -> Result<AsyncDbPool, DbError> {
-    use sqlx::Executor;
-    let url = std::env::var("DATABASE_URL")
-        .or_else(|_| std::env::var("WECLAWBOT_PG_URL"))
-        .map_err(|_| {
-            DbError::Pool(
-                "tests need DATABASE_URL pointing at a *_test postgres DB \
-                 (NOT the production DB; tests wipe it on each call)"
-                    .into(),
-            )
-        })?;
-    // Safety: extract DB name from DSN, refuse anything that isn't `_test`-suffixed.
-    let db_name = url.rsplit('/').next().unwrap_or("");
-    let db_name_clean = db_name.split('?').next().unwrap_or("");
-    if !db_name_clean.ends_with("_test") {
-        return Err(DbError::Pool(format!(
-            "REFUSING to wipe non-test DB '{db_name_clean}': test DSN must end in '_test' \
-             (e.g., postgres://.../weclawbot_test). Set DATABASE_URL accordingly."
-        )));
-    }
+    let pg = test_pg_container().await;
+    let db_name = format!("t_{}", uuid::Uuid::new_v4().simple());
+    create_test_database(pg, &db_name).await?;
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        pg.user, pg.password, pg.host, pg.port, db_name
+    );
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
         .await
         .map_err(|e| DbError::Pool(e.to_string()))?;
-    pool.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
-        .await
-        .map_err(|e| DbError::Migration(format!("test reset schema: {e}")))?;
     apply_migrations(&pool).await?;
     Ok(pool)
+}
+
+#[cfg(test)]
+struct TestPgContainer {
+    // Kept alive (Drop stops the container) by the OnceCell.
+    _container: testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
+    user: String,
+    password: String,
+    host: String,
+    port: u16,
+}
+
+#[cfg(test)]
+static TEST_PG: tokio::sync::OnceCell<TestPgContainer> = tokio::sync::OnceCell::const_new();
+
+#[cfg(test)]
+async fn test_pg_container() -> &'static TestPgContainer {
+    TEST_PG
+        .get_or_init(|| async {
+            use testcontainers::runners::AsyncRunner;
+            use testcontainers_modules::postgres::Postgres;
+
+            let user = "postgres".to_string();
+            let password = "postgres".to_string();
+            let container = Postgres::default()
+                .start()
+                .await
+                .expect("start postgres testcontainer (need docker/podman)");
+            let port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("testcontainer port");
+            let host = container
+                .get_host()
+                .await
+                .expect("testcontainer host")
+                .to_string();
+            TestPgContainer {
+                _container: container,
+                user,
+                password,
+                host,
+                port,
+            }
+        })
+        .await
+}
+
+#[cfg(test)]
+async fn create_test_database(pg: &TestPgContainer, name: &str) -> Result<(), DbError> {
+    use sqlx::Executor;
+    let admin_url = format!(
+        "postgres://{}:{}@{}:{}/postgres",
+        pg.user, pg.password, pg.host, pg.port
+    );
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .map_err(|e| DbError::Pool(format!("admin connect: {e}")))?;
+    // Identifier safe: name is `t_<32 hex chars>`, no quoting risk, but
+    // wrap anyway since CREATE DATABASE doesn't accept placeholders.
+    admin
+        .execute(format!(r#"CREATE DATABASE "{name}""#).as_str())
+        .await
+        .map_err(|e| DbError::Migration(format!("create test db: {e}")))?;
+    admin.close().await;
+    Ok(())
 }
 
 #[cfg(test)]

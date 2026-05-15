@@ -1,4 +1,4 @@
-//! AsyncDefaultsRepo — v4.1 K2 sqlx 版本。
+//! AsyncDefaultsRepo — v7.0 JSONB + TIMESTAMPTZ.
 
 use chrono::Utc;
 use serde_json::Value;
@@ -16,20 +16,15 @@ impl SqlxDefaultsRepo {
     }
 
     pub async fn get(&self) -> Result<Option<Value>, DbError> {
-        let row: Option<(String,)> =
+        let row: Option<(Value,)> =
             sqlx::query_as("SELECT settings_json FROM defaults WHERE id = 1")
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| DbError::Pool(format!("sqlx defaults get: {e}")))?;
-        Ok(match row {
-            Some((s,)) => Some(serde_json::from_str(&s)?),
-            None => None,
-        })
+        Ok(row.map(|(v,)| v))
     }
 
     pub async fn set(&self, settings: &Value) -> Result<(), DbError> {
-        let json = serde_json::to_string(settings)?;
-        let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO defaults (id, settings_json, updated_at)
              VALUES (1, $1, $2)
@@ -37,8 +32,8 @@ impl SqlxDefaultsRepo {
                  settings_json = excluded.settings_json,
                  updated_at = excluded.updated_at",
         )
-        .bind(&json)
-        .bind(&now)
+        .bind(settings)
+        .bind(Utc::now())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx defaults set: {e}")))?;
@@ -46,16 +41,13 @@ impl SqlxDefaultsRepo {
     }
 
     pub async fn bootstrap(&self, seed: &Value) -> Result<bool, DbError> {
-        let json = serde_json::to_string(seed)?;
-        let now = Utc::now().to_rfc3339();
-        // v5.2 O2: ANSI ON CONFLICT (SQLite 3.24+ / Postgres)
         let res = sqlx::query(
             "INSERT INTO defaults (id, settings_json, updated_at)
              VALUES (1, $1, $2)
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind(&json)
-        .bind(&now)
+        .bind(seed)
+        .bind(Utc::now())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx defaults bootstrap: {e}")))?;

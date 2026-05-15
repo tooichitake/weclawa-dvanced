@@ -94,17 +94,24 @@ tar = "0.4"
 flate2 = "1"
 url = "2"
 
-# v5.6: PG-only. Daemon runtime use Postgres exclusively (no more
-# `--features postgres` cfg gate). sqlite feature kept only because the
-# `weclawbot import-sqlite ./state.db` one-shot migration command needs
-# to READ the legacy DB and write to PG. After all users have migrated
-# (some future v7), `sqlx/sqlite` feature comes out too.
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "sqlite", "macros"] }
+# v7.0: PG-only, native types (JSONB / UUID / TIMESTAMPTZ).
+# - `chrono`: read/write TIMESTAMPTZ as chrono::DateTime<Utc>
+# - `uuid`: read/write UUID columns as uuid::Uuid
+# - `json`: read/write JSONB as serde_json::Value or sqlx::types::Json
+#   (already implicit via serde_json dep, but explicit feature enables
+#   query_as decoding)
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "macros",
+    "chrono",
+    "uuid",
+    "json",
+] }
 
-# v5.6: SQLite read-only via rusqlite for the one-shot import-sqlite
-# command. Kept non-optional so disaster-recovery (someone hands you an
-# old state.db) is always one CLI call away.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# v7.0 sqlite import path retired. rusqlite removed; legacy SQLite users
+# stuck on pre-v5.6 must `git checkout v5.6 && weclawbot import-sqlite ...`
+# first, then upgrade to v7. Documented in CLAUDE.md.
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
 
@@ -172,6 +179,15 @@ wiremock = "0.6"
 tokio = { version = "1", features = ["full", "test-util"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+
+# v7.0 — per-test PG isolation via testcontainers. The bare crate handles
+# container lifecycle (start on first use, stop at process exit);
+# `testcontainers-modules/postgres` gives a typed `Postgres` image
+# (5M+ downloads/mo combined). Each test calls `open_in_memory()` which
+# creates a fresh database inside the shared container — fully isolated
+# at the DB level, no cross-test row contamination.
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

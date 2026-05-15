@@ -25,8 +25,7 @@ impl SqlxDedupRepo {
         account_id: &str,
         msg_id: i64,
     ) -> Result<bool, DbError> {
-        let now = chrono::Utc::now().to_rfc3339();
-        // v5.2 O2: ANSI ON CONFLICT (SQLite 3.24+ / Postgres)
+        // v7.0: first_seen_at is TIMESTAMPTZ.
         let res = sqlx::query(
             "INSERT INTO seen_messages
                  (msg_id, first_seen_at, tenant_id, account_id)
@@ -34,7 +33,7 @@ impl SqlxDedupRepo {
              ON CONFLICT (msg_id) DO NOTHING",
         )
         .bind(msg_id)
-        .bind(&now)
+        .bind(chrono::Utc::now())
         .bind(tenant_id)
         .bind(account_id)
         .execute(&self.pool)
@@ -62,7 +61,7 @@ impl SqlxDedupRepo {
     /// 削峰 — 删 first_seen_at < cutoff 的老行。1% lazy prune 同 sync 版本。
     pub async fn prune_older_than(&self, cutoff: &str) -> Result<u64, DbError> {
         let res = sqlx::query("DELETE FROM seen_messages WHERE first_seen_at < $1")
-            .bind(cutoff)
+            .bind(crate::storage::ts::parse_rfc3339(cutoff))
             .execute(&self.pool)
             .await
             .map_err(|e| DbError::Pool(format!("sqlx prune: {e}")))?;

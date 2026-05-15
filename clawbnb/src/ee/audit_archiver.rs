@@ -132,19 +132,28 @@ impl AuditArchiver for SqliteAuditArchiver {
         let cutoff_str = cutoff_rfc3339.to_string();
         let archive_dir = self.archive_dir.clone();
 
-        // Step 1: collect rows via sqlx
-        let rows: Vec<(i64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>)> =
-            sqlx::query_as(
-                "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
-                 FROM audit_log
-                 WHERE tenant_id = $1 AND ts < $2
-                 ORDER BY id ASC",
-            )
-            .bind(&tenant_str)
-            .bind(&cutoff_str)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| WeclawError::Internal(format!("sqlx archive query: {e}")))?;
+        // Step 1: collect rows via sqlx. v7.0 types: ts TIMESTAMPTZ,
+        // actor_key_id UUID (nullable), before/after_json JSONB.
+        let rows: Vec<(
+            i64,
+            chrono::DateTime<chrono::Utc>,
+            Option<uuid::Uuid>,
+            String,
+            Option<String>,
+            Option<serde_json::Value>,
+            Option<serde_json::Value>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
+             FROM audit_log
+             WHERE tenant_id = $1 AND ts < $2
+             ORDER BY id ASC",
+        )
+        .bind(&tenant_str)
+        .bind(crate::storage::ts::parse_rfc3339(&cutoff_str))
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| WeclawError::Internal(format!("sqlx archive query: {e}")))?;
 
         if rows.is_empty() {
             return Ok(ArchiveReport {
@@ -157,15 +166,15 @@ impl AuditArchiver for SqliteAuditArchiver {
         }
         let mut jsonl_buf = String::new();
         let mut row_ids: Vec<i64> = Vec::with_capacity(rows.len());
-        for (id, ts, actor, action, target, before_raw, after_raw, ip) in &rows {
+        for (id, ts, actor, action, target, before_v, after_v, ip) in &rows {
             let line = json!({
                 "id": id,
-                "ts": ts,
-                "actor_key_id": actor,
+                "ts": crate::storage::ts::format_rfc3339(ts),
+                "actor_key_id": actor.map(|u| u.to_string()),
                 "action": action,
                 "target": target,
-                "before_json": before_raw,
-                "after_json": after_raw,
+                "before_json": before_v,
+                "after_json": after_v,
                 "ip": ip,
             });
             jsonl_buf.push_str(&line.to_string());

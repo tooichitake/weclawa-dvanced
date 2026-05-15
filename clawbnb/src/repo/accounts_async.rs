@@ -1,10 +1,8 @@
-//! AsyncAccountRepo — v4.1 K7 sqlx 版本。
-//!
-//! 跟 sync 版一样处理 token 加密：写时 AES-GCM 加密到 token_ciphertext +
-//! token_nonce；读时优先解 ciphertext，跌回 plaintext。
+//! AsyncAccountRepo — v7.0 TIMESTAMPTZ for saved_at, BYTEA for cipher.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 
 use crate::ids::{AccountId, BaseUrl, BotToken, WeixinUserId};
 use crate::repo::accounts::Account;
@@ -14,22 +12,24 @@ pub struct SqlxAccountRepo {
     pool: AsyncDbPool,
 }
 
+type AccountRow = (
+    String,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+    String,
+);
+
 impl SqlxAccountRepo {
     pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 
     pub async fn get(&self, id: &AccountId) -> Result<Option<Account>, DbError> {
-        let row: Option<(
-            String,
-            Option<String>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            String,
-            Option<String>,
-            String,
-            String,
-        )> = sqlx::query_as(
+        let row: Option<AccountRow> = sqlx::query_as(
             "SELECT account_id, token, token_ciphertext, token_nonce,
                     base_url, weixin_user_id, saved_at, platform_id
              FROM accounts WHERE account_id = $1",
@@ -42,16 +42,7 @@ impl SqlxAccountRepo {
     }
 
     pub async fn list(&self) -> Result<Vec<Account>, DbError> {
-        let rows: Vec<(
-            String,
-            Option<String>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            String,
-            Option<String>,
-            String,
-            String,
-        )> = sqlx::query_as(
+        let rows: Vec<AccountRow> = sqlx::query_as(
             "SELECT account_id, token, token_ciphertext, token_nonce,
                     base_url, weixin_user_id, saved_at, platform_id
              FROM accounts ORDER BY saved_at DESC",
@@ -63,16 +54,7 @@ impl SqlxAccountRepo {
     }
 
     pub async fn list_for_tenant(&self, tenant_id: &str) -> Result<Vec<Account>, DbError> {
-        let rows: Vec<(
-            String,
-            Option<String>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            String,
-            Option<String>,
-            String,
-            String,
-        )> = sqlx::query_as(
+        let rows: Vec<AccountRow> = sqlx::query_as(
             "SELECT account_id, token, token_ciphertext, token_nonce,
                     base_url, weixin_user_id, saved_at, platform_id
              FROM accounts WHERE tenant_id = $1 ORDER BY saved_at DESC",
@@ -115,7 +97,7 @@ impl SqlxAccountRepo {
         .bind(&nonce)
         .bind(account.base_url.as_str())
         .bind(account.weixin_user_id.as_ref().map(|u| u.as_str()))
-        .bind(&account.saved_at)
+        .bind(ts::parse_rfc3339(&account.saved_at))
         .bind(&account.platform_id)
         .execute(&self.pool)
         .await
@@ -155,7 +137,7 @@ impl SqlxAccountRepo {
         .bind(new_token.expose())
         .bind(&ct)
         .bind(&nonce)
-        .bind(Utc::now().to_rfc3339())
+        .bind(Utc::now())
         .bind(id.as_str())
         .execute(&self.pool)
         .await
@@ -174,21 +156,8 @@ impl SqlxAccountRepo {
     }
 }
 
-/// 把 query 返的 row tuple 转成 Account，处理 token 加密优先级。
-fn materialize_account(
-    row: (
-        String,
-        Option<String>,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        String,
-        Option<String>,
-        String,
-        String,
-    ),
-) -> Account {
+fn materialize_account(row: AccountRow) -> Account {
     let (id, plaintext, ct, nonce, base_url, weixin_user_id, saved_at, platform_id) = row;
-    // Prefer ciphertext (Phase 6.1), fall back to plaintext for legacy rows.
     let token = match (ct.as_ref(), nonce.as_ref()) {
         (Some(c), Some(n)) if n.len() == 12 => {
             let mut nonce_arr = [0u8; 12];
@@ -208,7 +177,7 @@ fn materialize_account(
         token,
         base_url: BaseUrl::new(base_url),
         weixin_user_id: weixin_user_id.map(WeixinUserId::new),
-        saved_at,
+        saved_at: ts::format_rfc3339(&saved_at),
         platform_id,
     }
 }

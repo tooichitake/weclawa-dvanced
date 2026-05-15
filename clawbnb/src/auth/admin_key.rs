@@ -98,19 +98,22 @@ pub async fn mint_new_key_async(
     .await
     .map_err(|e| format!("mint blocking: {e}"))??;
 
-    // sqlx insert
+    // v7.0: id is UUID, timestamps are TIMESTAMPTZ.
+    let id_uuid = uuid::Uuid::parse_str(&mint_inner.record.id)
+        .map_err(|e| format!("internal: minted id not uuid: {e}"))?;
+    let created_dt = crate::storage::ts::parse_rfc3339(&mint_inner.record.created_at);
     sqlx::query(
         "INSERT INTO admin_keys
              (id, name, key_hash, role, created_at, last_used_at, revoked_at, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
-    .bind(&mint_inner.record.id)
+    .bind(id_uuid)
     .bind(&mint_inner.record.name)
     .bind(&mint_inner.record.key_hash)
     .bind(mint_inner.record.role.as_str())
-    .bind(&mint_inner.record.created_at)
-    .bind(&mint_inner.record.last_used_at)
-    .bind(&mint_inner.record.revoked_at)
+    .bind(created_dt)
+    .bind(crate::storage::ts::parse_rfc3339_opt(&mint_inner.record.last_used_at))
+    .bind(crate::storage::ts::parse_rfc3339_opt(&mint_inner.record.revoked_at))
     .bind(&mint_inner.record.tenant_id)
     .execute(&pool)
     .await

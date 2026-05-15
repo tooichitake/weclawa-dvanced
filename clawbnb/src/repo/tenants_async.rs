@@ -1,32 +1,24 @@
-//! AsyncTenantRepo — v4 J2 hot path 切 sqlx。
-//!
-//! 跟 [`crate::repo::tenants::SqliteTenantRepo`] (rusqlite) **接口对等**，
-//! 但所有方法是 `async fn`，axum handler 直接 `.await` 不再走
-//! `spawn_blocking`。
-//!
-//! ## 使用规则
-//!
-//! - **新代码**：直接用 `AsyncTenantRepo`
-//! - **遗留 CLI / startup**：仍走 sync 版（CLI 是单线程不在乎阻塞）
-//! - **handler.rs hot path**：切 async（每条 inbound 都走 is_active）
+//! AsyncTenantRepo — v7.0 TIMESTAMPTZ for created_at / deleted_at /
+//! last_billing_event_at.
 
-use crate::storage::db_async::AsyncDbPool;
+use chrono::{DateTime, Utc};
 
 use crate::storage::db::DbError;
+use crate::storage::db_async::AsyncDbPool;
 use crate::tenancy::{TenantId, TenantStatus};
 
-#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct AsyncTenant {
     pub id: String,
     pub name: String,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
     pub status: String,
     pub stripe_customer_id: Option<String>,
-    pub deleted_at: Option<String>,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub billing_status: String,
-    pub billing_period_end: Option<String>,
+    pub billing_period_end: Option<DateTime<Utc>>,
     pub last_billing_event: Option<String>,
-    pub last_billing_event_at: Option<String>,
+    pub last_billing_event_at: Option<DateTime<Utc>>,
 }
 
 impl AsyncTenant {
@@ -56,15 +48,11 @@ impl SqlxTenantRepo {
         .map_err(|e| DbError::Pool(format!("sqlx get tenant: {e}")))
     }
 
-    /// 是否允许处理 inbound — `status='active'` AND (`billing_status='active'`
-    /// OR (`billing_status='pending'` AND `grace_until > now`))。
-    ///
-    /// 跟 sync `SqliteTenantRepo::is_active` 行为 1:1 一致。
+    /// 是否允许处理 inbound — `status='active'` AND
+    /// (`billing_status='active'` OR
+    ///  (`billing_status='pending'` AND `grace_until > now`)).
     pub async fn is_active(&self, id: &TenantId) -> Result<bool, DbError> {
-        let now_rfc = chrono::Utc::now().to_rfc3339();
         let row: Option<(i64,)> = sqlx::query_as(
-            // PG literals are INT4; cast result to BIGINT so Rust `i64`
-            // tuple decodes cleanly (v5.6 PG-only).
             "SELECT CASE
                 WHEN status != 'active' THEN 0
                 WHEN billing_status = 'active' THEN 1
@@ -75,7 +63,7 @@ impl SqlxTenantRepo {
              END::BIGINT
              FROM tenants WHERE id = $2",
         )
-        .bind(&now_rfc)
+        .bind(Utc::now())
         .bind(id.as_str())
         .fetch_optional(&self.pool)
         .await
@@ -83,14 +71,12 @@ impl SqlxTenantRepo {
         Ok(row.map(|r| r.0 == 1).unwrap_or(false))
     }
 
-    /// Stripe webhook 调 — 更新 billing 字段 + 记 event 类型/时间。
     pub async fn update_billing_status(
         &self,
         id: &TenantId,
         billing_status: &str,
         event_type: &str,
     ) -> Result<bool, DbError> {
-        let now = chrono::Utc::now().to_rfc3339();
         let res = sqlx::query(
             "UPDATE tenants
              SET billing_status = $1,
@@ -100,7 +86,7 @@ impl SqlxTenantRepo {
         )
         .bind(billing_status)
         .bind(event_type)
-        .bind(&now)
+        .bind(Utc::now())
         .bind(id.as_str())
         .execute(&self.pool)
         .await
@@ -175,9 +161,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let future = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339();
+        let future = Utc::now() + chrono::Duration::days(7);
         sqlx::query("UPDATE tenants SET grace_until = $1 WHERE id = 'default'")
-            .bind(&future)
+            .bind(future)
             .execute(&r.pool)
             .await
             .unwrap();

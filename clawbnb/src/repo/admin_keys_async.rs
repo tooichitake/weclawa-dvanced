@@ -1,21 +1,12 @@
-//! AsyncAdminKeyRepo — v4 J4 hot path 切 sqlx。
-//!
-//! bearer_auth middleware 每个 axum 请求都打一次 verify_and_load —
-//! 包括 list_active + touch_last_used。这是最热的 repo 之一。
-//!
-//! ## verify_and_load 仍走 spawn_blocking
-//!
-//! argon2 验证本身 ~75ms × N keys 是**CPU-bound**，必须 spawn_blocking
-//! 推到 blocking pool 否则会 stall reactor。本 repo 提供 async list +
-//! touch；argon2 verify 部分 caller 自己 spawn_blocking 跑。
-//!
-//! 这跟 IO async 不冲突 —— async IO 解决"reactor 等 IO"问题，CPU 重活
-//! 仍然得分到 blocking 线程。
+//! AsyncAdminKeyRepo — v7.0 id UUID + timestamps TIMESTAMPTZ.
 
-use crate::storage::db_async::AsyncDbPool;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::repo::admin_keys::{AdminKeyRecord, Role};
 use crate::storage::db::DbError;
+use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 
 pub struct SqlxAdminKeyRepo {
     pool: AsyncDbPool,
@@ -28,39 +19,47 @@ impl SqlxAdminKeyRepo {
 
     /// list_active — verify_and_load 的输入。每个 axum 请求都跑。
     pub async fn list_active(&self) -> Result<Vec<AdminKeyRecord>, DbError> {
-        let rows: Vec<(String, String, String, String, String, Option<String>, Option<String>, String)> =
-            sqlx::query_as(
-                "SELECT id, name, key_hash, role, created_at, last_used_at, revoked_at, tenant_id
-                 FROM admin_keys WHERE revoked_at IS NULL
-                 ORDER BY created_at ASC",
-            )
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::Pool(format!("sqlx list_active: {e}")))?;
+        let rows: Vec<(
+            Uuid,
+            String,
+            String,
+            String,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+            String,
+        )> = sqlx::query_as(
+            "SELECT id, name, key_hash, role, created_at, last_used_at, revoked_at, tenant_id
+             FROM admin_keys WHERE revoked_at IS NULL
+             ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::Pool(format!("sqlx list_active: {e}")))?;
         Ok(rows
             .into_iter()
             .map(|(id, name, key_hash, role, created_at, last_used_at, revoked_at, tenant_id)| {
                 AdminKeyRecord {
-                    id,
+                    id: id.to_string(),
                     name,
                     key_hash,
                     role: Role::from_str(&role),
-                    created_at,
-                    last_used_at,
-                    revoked_at,
+                    created_at: ts::format_rfc3339(&created_at),
+                    last_used_at: ts::format_rfc3339_opt(&last_used_at),
+                    revoked_at: ts::format_rfc3339_opt(&revoked_at),
                     tenant_id,
                 }
             })
             .collect())
     }
 
-    /// 更新 last_used_at — 每个成功 verify 后 fire-and-forget 调，async 让
-    /// 它不阻塞当前请求的 handler 链。
+    /// 更新 last_used_at — 每个成功 verify 后 fire-and-forget 调。
     pub async fn touch_last_used(&self, id: &str) -> Result<(), DbError> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let uuid =
+            Uuid::parse_str(id).map_err(|e| DbError::Pool(format!("admin key id not uuid: {e}")))?;
         sqlx::query("UPDATE admin_keys SET last_used_at = $1 WHERE id = $2")
-            .bind(&now)
-            .bind(id)
+            .bind(Utc::now())
+            .bind(uuid)
             .execute(&self.pool)
             .await
             .map_err(|e| DbError::Pool(format!("sqlx touch_last_used: {e}")))?;

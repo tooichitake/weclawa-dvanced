@@ -1,6 +1,8 @@
-//! AsyncRateLimitRepo — v4.1 K3 sqlx 版本。
+//! AsyncRateLimitRepo — v7.0 window_start_ts TIMESTAMPTZ.
 
+use chrono::{DateTime, Utc};
 use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 
 use crate::repo::rate_limits::WindowCount;
 use crate::storage::db::DbError;
@@ -19,6 +21,7 @@ impl SqlxRateLimitRepo {
         scope_key: &str,
         window_start_ts: &str,
     ) -> Result<u64, DbError> {
+        let ts = ts::parse_rfc3339(window_start_ts);
         sqlx::query(
             "INSERT INTO rate_limits (scope_key, window_start_ts, count)
              VALUES ($1, $2, 1)
@@ -26,7 +29,7 @@ impl SqlxRateLimitRepo {
                  count = rate_limits.count + 1",
         )
         .bind(scope_key)
-        .bind(window_start_ts)
+        .bind(ts)
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx rate inc: {e}")))?;
@@ -34,7 +37,7 @@ impl SqlxRateLimitRepo {
             "SELECT count FROM rate_limits WHERE scope_key = $1 AND window_start_ts = $2",
         )
         .bind(scope_key)
-        .bind(window_start_ts)
+        .bind(ts)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx rate get-after-inc: {e}")))?;
@@ -46,7 +49,7 @@ impl SqlxRateLimitRepo {
             "SELECT count FROM rate_limits WHERE scope_key = $1 AND window_start_ts = $2",
         )
         .bind(scope_key)
-        .bind(window_start_ts)
+        .bind(ts::parse_rfc3339(window_start_ts))
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx rate get: {e}")))?;
@@ -55,8 +58,6 @@ impl SqlxRateLimitRepo {
 
     pub async fn sum_for_scope(&self, scope_key: &str) -> Result<u64, DbError> {
         let row: (i64,) = sqlx::query_as(
-            // PG SUM returns NUMERIC for BIGINT input; cast back to BIGINT
-            // so Rust `i64` decodes cleanly.
             "SELECT COALESCE(SUM(count), 0)::BIGINT FROM rate_limits WHERE scope_key = $1",
         )
         .bind(scope_key)
@@ -68,7 +69,7 @@ impl SqlxRateLimitRepo {
 
     pub async fn prune_older_than(&self, cutoff: &str) -> Result<u64, DbError> {
         let res = sqlx::query("DELETE FROM rate_limits WHERE window_start_ts < $1")
-            .bind(cutoff)
+            .bind(ts::parse_rfc3339(cutoff))
             .execute(&self.pool)
             .await
             .map_err(|e| DbError::Pool(format!("sqlx rate prune: {e}")))?;
@@ -76,7 +77,7 @@ impl SqlxRateLimitRepo {
     }
 
     pub async fn list_scope(&self, scope_key: &str) -> Result<Vec<WindowCount>, DbError> {
-        let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        let rows: Vec<(String, DateTime<Utc>, i64)> = sqlx::query_as(
             "SELECT scope_key, window_start_ts, count FROM rate_limits
              WHERE scope_key = $1 ORDER BY window_start_ts DESC",
         )
@@ -88,7 +89,7 @@ impl SqlxRateLimitRepo {
             .into_iter()
             .map(|(s, w, c)| WindowCount {
                 scope_key: s,
-                window_start_ts: w,
+                window_start_ts: ts::format_rfc3339(&w),
                 count: c.max(0) as u64,
             })
             .collect())

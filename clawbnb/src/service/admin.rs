@@ -75,25 +75,31 @@ pub async fn list_admin_keys(req: Request) -> Result<Json<Value>, (StatusCode, J
     require(&ctx, Role::SuperAdmin)?;
     let pool = db_async::try_global_async_pool()
         .ok_or_else(|| internal_str("async pool not initialized".to_string()))?;
-    let rows: Vec<(String, String, String, String, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT id, name, role, created_at, last_used_at, revoked_at
-             FROM admin_keys ORDER BY created_at DESC",
-        )
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| internal_str(format!("sqlx admin list: {e}")))?;
+    let rows: Vec<(
+        uuid::Uuid,
+        String,
+        String,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT id, name, role, created_at, last_used_at, revoked_at
+         FROM admin_keys ORDER BY created_at DESC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| internal_str(format!("sqlx admin list: {e}")))?;
     let view: Vec<Value> = rows
         .into_iter()
         .map(|(id, name, role, created_at, last_used_at, revoked_at)| {
             let active = revoked_at.is_none();
             json!({
-                "id": id,
+                "id": id.to_string(),
                 "name": name,
                 "role": role,
-                "created_at": created_at,
-                "last_used_at": last_used_at,
-                "revoked_at": revoked_at,
+                "created_at": crate::storage::ts::format_rfc3339(&created_at),
+                "last_used_at": crate::storage::ts::format_rfc3339_opt(&last_used_at),
+                "revoked_at": crate::storage::ts::format_rfc3339_opt(&revoked_at),
                 "active": active,
             })
         })
@@ -172,10 +178,13 @@ pub async fn revoke_admin_key(
     let pool = db_async::try_global_async_pool()
         .ok_or_else(|| internal_str("async pool not initialized".to_string()))?;
     // 取 target row + super_admin count
-    let target: Option<(String, String, Option<String>)> = sqlx::query_as(
+    // v7.0: admin_keys.id is UUID native. Parse incoming string.
+    let id_uuid = uuid::Uuid::parse_str(&id)
+        .map_err(|_| bad_request("id must be a valid UUID"))?;
+    let target: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT name, role, revoked_at FROM admin_keys WHERE id = $1",
     )
-    .bind(&id)
+    .bind(id_uuid)
     .fetch_optional(&pool)
     .await
     .map_err(|e| internal_str(format!("sqlx admin get: {e}")))?;
@@ -197,12 +206,11 @@ pub async fn revoke_admin_key(
         }
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
     let res = sqlx::query(
         "UPDATE admin_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
     )
-    .bind(&now)
-    .bind(&id)
+    .bind(chrono::Utc::now())
+    .bind(id_uuid)
     .execute(&pool)
     .await
     .map_err(|e| internal_str(format!("sqlx admin revoke: {e}")))?;
@@ -281,14 +289,14 @@ pub async fn list_tenants(req: Request) -> Result<Json<Value>, (StatusCode, Json
     let rows: Vec<(
         String,
         String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
+        chrono::DateTime<chrono::Utc>,
         String,
         Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
         Option<String>,
-        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
     )> = sqlx::query_as(
         "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
                 billing_status, billing_period_end, last_billing_event, last_billing_event_at
@@ -297,9 +305,15 @@ pub async fn list_tenants(req: Request) -> Result<Json<Value>, (StatusCode, Json
     .fetch_all(&pool)
     .await
     .map_err(|e| internal_str(format!("sqlx list_tenants: {e}")))?;
+    let fmt = crate::storage::ts::format_rfc3339;
+    let fmt_opt = crate::storage::ts::format_rfc3339_opt;
     let view: Vec<Value> = rows
         .into_iter()
         .map(|(id, name, created_at, status, customer, deleted_at, bs, period_end, last_event, last_event_at)| {
+            let created_at = fmt(&created_at);
+            let deleted_at = fmt_opt(&deleted_at);
+            let period_end = fmt_opt(&period_end);
+            let last_event_at = fmt_opt(&last_event_at);
             json!({
                 "id": id,
                 "name": name,

@@ -1,16 +1,30 @@
-//! AsyncTrustRepo — v4.1 K4 sqlx 版本。
+//! AsyncTrustRepo — v7.0 timestamps TIMESTAMPTZ, inputs_json JSONB.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::json;
-use crate::storage::db_async::AsyncDbPool;
 
 use crate::repo::trust::TrustSnapshot;
 use crate::storage::db::DbError;
+use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 use crate::tenancy::trust::{TrustInputs, TrustTier};
 
 pub struct SqlxTrustRepo {
     pool: AsyncDbPool,
 }
+
+type TrustRow = (
+    String,
+    String,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
 impl SqlxTrustRepo {
     pub fn new(pool: AsyncDbPool) -> Self {
@@ -18,7 +32,7 @@ impl SqlxTrustRepo {
     }
 
     pub async fn get(&self, user_hash: &str) -> Result<Option<TrustSnapshot>, DbError> {
-        let row: Option<(String, String, f64, f64, f64, f64, f64, String, String, String)> = sqlx::query_as(
+        let row: Option<TrustRow> = sqlx::query_as(
             "SELECT user_hash, tenant_id, success_rate, uptime, threat, integrity,
                     score, tier, updated_at, tier_since
              FROM user_trust_inputs WHERE user_hash = $1",
@@ -27,20 +41,7 @@ impl SqlxTrustRepo {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx trust get: {e}")))?;
-        Ok(row.map(|r| TrustSnapshot {
-            user_hash: r.0,
-            tenant_id: r.1,
-            inputs: TrustInputs {
-                success_rate: r.2,
-                uptime: r.3,
-                threat: r.4,
-                integrity: r.5,
-            },
-            score: r.6,
-            tier: TrustTier::from_score(r.6),
-            updated_at: r.8,
-            tier_since: r.9,
-        }))
+        Ok(row.map(materialize))
     }
 
     pub async fn upsert(&self, snap: &TrustSnapshot) -> Result<(), DbError> {
@@ -52,7 +53,7 @@ impl SqlxTrustRepo {
                 .map_err(|e| DbError::Pool(format!("sqlx trust prev: {e}")))?;
         let prev_tier = prev.as_ref().map(|t| t.0.clone());
         let tier_changed = prev_tier.as_deref() != Some(snap.tier.as_str());
-        let tier_since = if tier_changed {
+        let tier_since_str = if tier_changed {
             snap.updated_at.clone()
         } else {
             snap.tier_since.clone()
@@ -82,20 +83,19 @@ impl SqlxTrustRepo {
         .bind(snap.inputs.integrity)
         .bind(snap.score)
         .bind(snap.tier.as_str())
-        .bind(&snap.updated_at)
-        .bind(&tier_since)
+        .bind(ts::parse_rfc3339(&snap.updated_at))
+        .bind(ts::parse_rfc3339(&tier_since_str))
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx trust upsert: {e}")))?;
 
         if tier_changed {
-            let inputs_json = json!({
+            let inputs_value = json!({
                 "success_rate": snap.inputs.success_rate,
                 "uptime": snap.inputs.uptime,
                 "threat": snap.inputs.threat,
                 "integrity": snap.inputs.integrity,
-            })
-            .to_string();
+            });
             sqlx::query(
                 "INSERT INTO user_trust_history
                      (user_hash, tenant_id, ts, inputs_json, score, tier, prev_tier)
@@ -103,8 +103,8 @@ impl SqlxTrustRepo {
             )
             .bind(&snap.user_hash)
             .bind(&snap.tenant_id)
-            .bind(Utc::now().to_rfc3339())
-            .bind(&inputs_json)
+            .bind(Utc::now())
+            .bind(&inputs_value)
             .bind(snap.score)
             .bind(snap.tier.as_str())
             .bind(prev_tier)
@@ -120,7 +120,7 @@ impl SqlxTrustRepo {
         tenant_id: &str,
         tier: TrustTier,
     ) -> Result<Vec<TrustSnapshot>, DbError> {
-        let rows: Vec<(String, String, f64, f64, f64, f64, f64, String, String, String)> = sqlx::query_as(
+        let rows: Vec<TrustRow> = sqlx::query_as(
             "SELECT user_hash, tenant_id, success_rate, uptime, threat, integrity,
                     score, tier, updated_at, tier_since
              FROM user_trust_inputs
@@ -132,23 +132,24 @@ impl SqlxTrustRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx trust list_by_tier: {e}")))?;
-        Ok(rows
-            .into_iter()
-            .map(|r| TrustSnapshot {
-                user_hash: r.0,
-                tenant_id: r.1,
-                inputs: TrustInputs {
-                    success_rate: r.2,
-                    uptime: r.3,
-                    threat: r.4,
-                    integrity: r.5,
-                },
-                score: r.6,
-                tier: TrustTier::from_score(r.6),
-                updated_at: r.8,
-                tier_since: r.9,
-            })
-            .collect())
+        Ok(rows.into_iter().map(materialize).collect())
+    }
+}
+
+fn materialize(r: TrustRow) -> TrustSnapshot {
+    TrustSnapshot {
+        user_hash: r.0,
+        tenant_id: r.1,
+        inputs: TrustInputs {
+            success_rate: r.2,
+            uptime: r.3,
+            threat: r.4,
+            integrity: r.5,
+        },
+        score: r.6,
+        tier: TrustTier::from_score(r.6),
+        updated_at: ts::format_rfc3339(&r.8),
+        tier_since: ts::format_rfc3339(&r.9),
     }
 }
 

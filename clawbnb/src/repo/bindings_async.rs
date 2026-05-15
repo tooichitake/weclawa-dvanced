@@ -1,7 +1,8 @@
 //! AsyncBindingRepo — v4.1 K5 sqlx 版本。
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 
 use crate::ids::{AccountId, WeixinUserId};
 use crate::repo::bindings::Binding;
@@ -17,7 +18,7 @@ impl SqlxBindingRepo {
     }
 
     pub async fn get(&self, user: &WeixinUserId) -> Result<Option<Binding>, DbError> {
-        let row: Option<(String, String, String)> = sqlx::query_as(
+        let row: Option<(String, String, DateTime<Utc>)> = sqlx::query_as(
             "SELECT active_account_id, agent_id, updated_at
              FROM bindings WHERE weixin_user_id = $1",
         )
@@ -29,7 +30,7 @@ impl SqlxBindingRepo {
             weixin_user_id: user.clone(),
             active_account_id: AccountId::new(acct),
             agent_id: agent,
-            updated_at: updated,
+            updated_at: ts::format_rfc3339(&updated),
         }))
     }
 
@@ -39,7 +40,7 @@ impl SqlxBindingRepo {
         active_account_id: &AccountId,
         agent_id: &str,
     ) -> Result<bool, DbError> {
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
         // v5.2 O2: ANSI ON CONFLICT 兼容 SQLite 3.24+ 和 Postgres，
         // 取代 SQLite-only "INSERT OR IGNORE"。
         let res = sqlx::query(
@@ -71,7 +72,7 @@ impl SqlxBindingRepo {
         user: &WeixinUserId,
         active_account_id: &AccountId,
     ) -> Result<bool, DbError> {
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
         let res = sqlx::query(
             "UPDATE bindings SET active_account_id = $1, updated_at = $2
              WHERE weixin_user_id = $3",
@@ -95,7 +96,7 @@ impl SqlxBindingRepo {
     }
 
     pub async fn list(&self) -> Result<Vec<Binding>, DbError> {
-        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, DateTime<Utc>)> = sqlx::query_as(
             "SELECT weixin_user_id, active_account_id, agent_id, updated_at
              FROM bindings ORDER BY updated_at DESC",
         )
@@ -108,7 +109,7 @@ impl SqlxBindingRepo {
                 weixin_user_id: WeixinUserId::new(u),
                 active_account_id: AccountId::new(a),
                 agent_id: g,
-                updated_at: t,
+                updated_at: ts::format_rfc3339(&t),
             })
             .collect())
     }
@@ -138,7 +139,7 @@ mod tests {
         )
         .bind(id)
         .bind("https://ilinkai.weixin.qq.com")
-        .bind("2026-05-13T00:00:00Z")
+        .bind(ts::parse_rfc3339("2026-05-13T00:00:00Z"))
         .execute(pool)
         .await
         .unwrap();

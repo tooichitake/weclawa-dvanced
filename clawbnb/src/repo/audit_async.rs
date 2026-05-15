@@ -1,11 +1,14 @@
-//! AsyncAuditRepo — v4.1 K6 sqlx 版本。
+//! AsyncAuditRepo — v7.0 ts TIMESTAMPTZ, before/after_json JSONB,
+//! actor_key_id UUID.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
-use crate::storage::db_async::AsyncDbPool;
+use uuid::Uuid;
 
 use crate::repo::audit::{AuditEntry, AuditInput};
 use crate::storage::db::DbError;
+use crate::storage::db_async::AsyncDbPool;
+use crate::storage::ts;
 
 pub struct SqlxAuditRepo {
     pool: AsyncDbPool,
@@ -17,24 +20,23 @@ impl SqlxAuditRepo {
     }
 
     pub async fn record(&self, input: AuditInput<'_>) -> Result<i64, DbError> {
-        let ts = Utc::now().to_rfc3339();
-        let before = input.before.map(serde_json::to_string).transpose()?;
-        let after = input.after.map(serde_json::to_string).transpose()?;
-        // v5.3: 用 `RETURNING id` 替代 SQLite-only `last_insert_rowid()` ──
-        // RETURNING 在 SQLite 3.35+ (2021-03-12) 和 Postgres 9.1+ 都支持，
-        // 是跨 backend portable 的拿 generated id 方法。
+        // actor_key_id is Option<&str> in API. Parse to UUID; if it's
+        // not a valid UUID treat as NULL (system actor).
+        let actor_uuid: Option<Uuid> = input
+            .actor_key_id
+            .and_then(|s| Uuid::parse_str(s).ok());
         let row: (i64,) = sqlx::query_as(
             "INSERT INTO audit_log
                  (ts, actor_key_id, action, target, before_json, after_json, ip)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id",
         )
-        .bind(&ts)
-        .bind(input.actor_key_id)
+        .bind(Utc::now())
+        .bind(actor_uuid)
         .bind(input.action)
         .bind(input.target)
-        .bind(&before)
-        .bind(&after)
+        .bind(input.before)
+        .bind(input.after)
         .bind(input.ip)
         .fetch_one(&self.pool)
         .await
@@ -47,26 +49,34 @@ impl SqlxAuditRepo {
         tenant_id: &str,
         limit: u32,
     ) -> Result<Vec<AuditEntry>, DbError> {
-        let rows: Vec<(i64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>)> =
-            sqlx::query_as(
-                "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
-                 FROM audit_log WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2",
-            )
-            .bind(tenant_id)
-            .bind(limit as i64)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::Pool(format!("sqlx audit list: {e}")))?;
+        let rows: Vec<(
+            i64,
+            DateTime<Utc>,
+            Option<Uuid>,
+            String,
+            Option<String>,
+            Option<Value>,
+            Option<Value>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
+             FROM audit_log WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2",
+        )
+        .bind(tenant_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::Pool(format!("sqlx audit list: {e}")))?;
         Ok(rows
             .into_iter()
-            .map(|(id, ts, actor, action, target, before_raw, after_raw, ip)| AuditEntry {
+            .map(|(id, ts, actor, action, target, before_v, after_v, ip)| AuditEntry {
                 id,
-                ts,
-                actor_key_id: actor,
+                ts: crate::storage::ts::format_rfc3339(&ts),
+                actor_key_id: actor.map(|u| u.to_string()),
                 action,
                 target,
-                before: before_raw.and_then(|s| serde_json::from_str::<Value>(&s).ok()),
-                after: after_raw.and_then(|s| serde_json::from_str::<Value>(&s).ok()),
+                before: before_v,
+                after: after_v,
                 ip,
             })
             .collect())
@@ -86,6 +96,10 @@ impl SqlxAuditRepo {
     }
 }
 
+// suppress unused import warning when ts helper isn't used here directly
+#[allow(unused_imports)]
+use ts as _ts;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,8 +113,11 @@ mod tests {
     async fn record_and_count_async() {
         let r = repo().await;
         assert_eq!(r.count().await.unwrap(), 0);
+        // v7.0: actor_key_id is UUID — must be a parseable uuid string,
+        // else treated as None (system actor).
+        let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
         r.record(AuditInput {
-            actor_key_id: Some("key-1"),
+            actor_key_id: Some(test_uuid),
             action: "users.delete",
             target: Some("u-abc"),
             before: None,
