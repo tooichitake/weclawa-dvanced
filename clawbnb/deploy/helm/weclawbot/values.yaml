@@ -31,11 +31,24 @@ daemon:
     port: 18011
   ingress:
     enabled: false
+    # IngressClass to bind to. Common values:
+    #   - "nginx"    — ingress-nginx (community / k8s SIG)
+    #   - "traefik"  — Traefik v2/v3
+    #   - "gce"      — GCE / GKE
+    #   - "alb"      — AWS Load Balancer Controller
+    # Leave className empty to fall back to the cluster default.
     className: nginx
-    # Pass through any controller-specific annotations (e.g. nginx
-    # body-size limits to match the daemon's 2MiB request cap).
+    # Pass through any controller-specific annotations. Defaults match
+    # ingress-nginx + cert-manager + matching the daemon's 2MiB body cap.
     annotations:
+      # nginx-ingress: match the daemon's RequestBodyLimitLayer cap (2 MiB).
       nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+      # cert-manager: auto-provision the TLS Secret named in tls.secretName.
+      # Set certManager.issuer to your ClusterIssuer (Let's Encrypt prod /
+      # staging) or remove this annotation to manage certs externally.
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      # Force HTTPS redirect — even if the operator forgets cluster-default.
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     hosts:
       - host: weclawbot.example.com
         paths:
@@ -45,6 +58,18 @@ daemon:
       - secretName: weclawbot-tls
         hosts:
           - weclawbot.example.com
+
+  # NetworkPolicy — defense-in-depth around /metrics. /metrics is
+  # unauthenticated by Prometheus convention; we expose it to anyone
+  # who can reach the Pod IP. NetworkPolicy restricts that to
+  # Prometheus + (optionally) operator's bastion ingress.
+  networkPolicy:
+    enabled: false
+    # Allow ingress from these namespaceSelectors + podSelectors. Most
+    # operators only want their `monitoring` namespace's prometheus to
+    # scrape. Add operator IPs via ipBlock if accessing /healthz from
+    # outside the cluster.
+    prometheusNamespace: monitoring
 
   # Per-user inbound rate limit (config.rate_limit.user_per_minute).
   # Baked into the ConfigMap mounted at /root/.weclawbot/config.json.

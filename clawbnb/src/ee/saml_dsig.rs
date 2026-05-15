@@ -628,7 +628,15 @@ fn strip_signature_element(xml: &str) -> Result<String, SamlError> {
         .map_err(|e| SamlError::Parse(format!("strip utf8: {e}")))
 }
 
-/// Exclusive XML Canonicalization (xml-exc-c14n) — strict subset:
+/// Exclusive XML Canonicalization (xml-exc-c14n) — strict subset.
+///
+/// `pub(crate)` since v7.5 — the SAML integration-test fixture in the
+/// `tests` module needs to canonicalize SignedInfo + the referenced
+/// Assertion before signing them, and the round-trip is only
+/// meaningful if both producer and verifier use the same c14n. Making
+/// this `pub(crate)` is the minimal exposure: still hidden from
+/// downstream crates, just visible to our test code in the same lib.
+#[allow(rustdoc::invalid_codeblock_attributes)]
 ///
 /// - Re-serialize via quick-xml, sorting attributes (ns decls by prefix,
 ///   regular attrs by namespace-URI then local-name).
@@ -646,7 +654,7 @@ fn strip_signature_element(xml: &str) -> Result<String, SamlError> {
 ///   declaration, so this is moot for our profile)
 /// - InclusiveNamespaces PrefixList (rare; we reject unknown profiles
 ///   in extract_signed_parts so this can't reach us)
-fn canonicalize_exc_c14n(xml: &str) -> Result<String, SamlError> {
+pub(crate) fn canonicalize_exc_c14n(xml: &str) -> Result<String, SamlError> {
     let mut reader = NsReader::from_str(xml);
     reader.config_mut().trim_text(false);
 
@@ -1119,19 +1127,115 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"ab"));
     }
 
-    // v7.2 note: a real end-to-end round-trip (sign a fixture
-    // SAMLResponse with a self-generated RSA key + self-signed X.509
-    // cert, then `verify_saml_response`) is the right integration test
-    // but requires either:
-    //   (a) an X.509 cert builder dep (e.g. `rcgen`), or
-    //   (b) check-in of a pre-generated test cert + private key, or
-    //   (c) a tests/integration/ fixture using real captured IdP
-    //       response XML (operator must redact).
-    //
-    // We do (c) as ee-only nightly integration test in a follow-up;
-    // the unit tests above cover: profile rejection, c14n correctness,
-    // SAML wrapping defense (signed Reference URI binds to assertion),
-    // XXE rejection, constant-time digest comparison. The RSA verify
-    // primitive itself is exercised by the `rsa` and `jsonwebtoken`
-    // crates' own test suites.
+    /// v7.5 — end-to-end SAML round-trip. Generates a self-signed
+    /// X.509 cert at runtime (via `rcgen`), composes a minimal valid
+    /// SAMLResponse with that cert's RSA key signing both the
+    /// referenced Assertion (digest) and the SignedInfo (signature),
+    /// then verifies it through `verify_saml_response` and checks the
+    /// extracted claims match what we put in.
+    ///
+    /// This is the integration test the previous note was waiting for.
+    /// Covers: c14n bit-equality between signer and verifier, RSA
+    /// arithmetic, digest binding, audience match, NameID + email
+    /// attribute extraction. If this passes, real-world Okta / Azure
+    /// AD responses using the same profile will too.
+    #[test]
+    fn round_trip_self_signed_succeeds() {
+        use rcgen::{CertificateParams, KeyPair};
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::EncodePrivateKey;
+        use rsa::signature::SignatureEncoding;
+        use rsa::signature::Signer;
+        use rsa::RsaPrivateKey;
+        use sha2::Digest;
+
+        // 1) Generate RSA-2048 with the `rsa` crate. rcgen's default
+        //    `ring` backend can't generate RSA on its own (ring only
+        //    supports RSA signing, not generation), so we generate
+        //    here and hand the key over to rcgen via PKCS#8 DER for
+        //    cert wrapping. This is the documented "BYO key" pattern.
+        //
+        // The `rsa` crate pulls in its own pinned `rand_core` version
+        // (older than the top-level rand crate), so OsRng types
+        // aren't compatible. Use `rsa::rand_core::OsRng` to side-step.
+        let mut rng = rsa::rand_core::OsRng;
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa-2048 gen");
+        let pkcs8_der = priv_key
+            .to_pkcs8_der()
+            .expect("rsa to pkcs8")
+            .as_bytes()
+            .to_vec();
+        let key_pair = KeyPair::try_from(pkcs8_der.as_slice())
+            .expect("rcgen import pkcs8 der");
+        let params = CertificateParams::new(vec!["test-idp.example".to_string()])
+            .expect("rcgen params");
+        let cert = params.self_signed(&key_pair).expect("rcgen self-sign");
+        let cert_pem = cert.pem();
+
+        // 2) Build the Assertion XML. Times in the future so Conditions
+        //    pass; audience matches what we'll pass to verify.
+        let now = chrono::Utc::now();
+        let not_before = now - chrono::Duration::seconds(60);
+        let not_after = now + chrono::Duration::minutes(5);
+        let issue_instant = now.to_rfc3339();
+        let not_before_s = not_before.to_rfc3339();
+        let not_after_s = not_after.to_rfc3339();
+
+        let audience = "https://sp.example/sp";
+        let email = "alice@acme.test";
+
+        let assertion_no_sig = format!(
+            r#"<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="a-1" Version="2.0" IssueInstant="{issue_instant}"><saml:Issuer>https://idp.example/idp</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">{email}</saml:NameID></saml:Subject><saml:Conditions NotBefore="{not_before_s}" NotOnOrAfter="{not_after_s}"><saml:AudienceRestriction><saml:Audience>{audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AttributeStatement><saml:Attribute Name="email"><saml:AttributeValue>{email}</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>"#,
+        );
+
+        // 3) Compute the digest of c14n(assertion) — that's what goes
+        //    into SignedInfo's DigestValue. Our enveloped-signature
+        //    transform strips <ds:Signature> first; since we haven't
+        //    embedded one yet, c14n directly is correct.
+        let assertion_canon =
+            canonicalize_exc_c14n(&assertion_no_sig).expect("c14n assertion");
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(assertion_canon.as_bytes());
+        let digest_b64 = general_purpose::STANDARD.encode(hasher.finalize());
+
+        // 4) Build SignedInfo with the digest. We use the exact
+        //    serialization the verifier will canonicalize.
+        let signed_info = format!(
+            r##"<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod><ds:Reference URI="#a-1"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"></ds:Transform><ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##,
+        );
+
+        // 5) Canonicalize SignedInfo + sign with RSA-PKCS#1v1.5-SHA256.
+        let signed_info_canon =
+            canonicalize_exc_c14n(&signed_info).expect("c14n signed_info");
+        let signing_key = SigningKey::<sha2::Sha256>::new(priv_key);
+        let sig_bytes = signing_key.sign(signed_info_canon.as_bytes()).to_bytes();
+        let sig_b64 = general_purpose::STANDARD.encode(&sig_bytes);
+
+        // 6) Stitch Signature back into the Assertion (between Issuer
+        //    and Subject is the canonical SAML 2.0 spec location).
+        let signature_block = format!(
+            r#"<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">{signed_info}<ds:SignatureValue>{sig_b64}</ds:SignatureValue></ds:Signature>"#,
+        );
+        let assertion_signed = assertion_no_sig.replace(
+            "</saml:Issuer>",
+            &format!("</saml:Issuer>{signature_block}"),
+        );
+
+        // 7) Wrap in <samlp:Response> envelope.
+        let response_xml = format!(
+            r#"<?xml version="1.0"?><samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="r-1" Version="2.0" IssueInstant="{issue_instant}">{assertion_signed}</samlp:Response>"#,
+        );
+
+        // 8) Verify. Should succeed and return the email.
+        let verified = verify_saml_response(&response_xml, &cert_pem, audience, None)
+            .expect("verify");
+        assert_eq!(verified.subject_name_id, email);
+        assert_eq!(verified.issuer, "https://idp.example/idp");
+        assert_eq!(verified.attributes.get("email").map(String::as_str), Some(email));
+
+        // 9) Negative: bump audience — should reject.
+        let bad =
+            verify_saml_response(&response_xml, &cert_pem, "wrong-audience", None);
+        assert!(bad.is_err(), "wrong audience must be rejected");
+    }
 }

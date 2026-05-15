@@ -50,6 +50,32 @@ pub fn check_inbound(user_id: &WeixinUserId, limit: u64) -> Option<String> {
                 )
                 .increment(1);
                 if count > limit {
+                    // v7.5 — write audit row so `trust_driver` can
+                    // compute the `integrity` factor (1 - breaches/total).
+                    // user_id (WeChat from_user_id) is mapped to user_hash
+                    // for stable trust scoring keying — same hashing as
+                    // monitor::handler uses for Sandbox::ensure. The
+                    // `block_on_async` here is in a hot path, so we
+                    // sync-await the audit write; failure is logged but
+                    // doesn't gate the throttle decision.
+                    let user_hash = crate::sandbox::hash_user_id_for_lookup(&user_id_str);
+                    if let Some(audit_pool) = db_async::try_global_async_pool() {
+                        let audit_repo = crate::repo::audit_async::SqlxAuditRepo::new(audit_pool);
+                        let after = serde_json::json!({
+                            "count": count,
+                            "limit": limit,
+                        });
+                        let _ = audit_repo
+                            .record(crate::repo::audit::AuditInput {
+                                actor_key_id: None,
+                                action: "rate_limit.breach",
+                                target: Some(&user_hash),
+                                before: None,
+                                after: Some(&after),
+                                ip: None,
+                            })
+                            .await;
+                    }
                     Some(format!(
                         "消息频率过高（当前窗口 {count}/{limit} 条/分钟），稍后再试。"
                     ))

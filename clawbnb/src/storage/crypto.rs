@@ -135,6 +135,11 @@ pub fn encrypt(plaintext: &[u8]) -> Result<(Vec<u8>, [u8; NONCE_LEN]), String> {
 /// `label` should be a stable string with a version tag, e.g.
 /// `"sso-session-v1"`. If the cookie format ever changes incompatibly,
 /// bump to `"sso-session-v2"` to invalidate all live cookies.
+///
+/// v7.5: gated behind `--features ee` since the only consumer
+/// (`auth::sso_session`) is itself ee-only. If a default-build
+/// caller needs subkey derivation later, lift the gate.
+#[cfg(feature = "ee")]
 pub fn derive_subkey(label: &str) -> Result<[u8; KEY_LEN], String> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;

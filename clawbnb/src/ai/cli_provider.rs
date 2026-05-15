@@ -86,6 +86,29 @@ pub async fn complete_with_content(
             "reason" => "pii_block_policy"
         )
         .increment(1);
+        // v7.5 — write audit row so `trust_driver` can compute the
+        // `threat` factor (fraction of recent inbounds that hit a PII
+        // Block policy). target = user_hash so the driver's GROUP BY
+        // works. The class list goes into `after` for forensics; PII
+        // scrubber on the audit path is a no-op on class names (they're
+        // not user content).
+        if let Some(pool) = crate::storage::db_async::try_global_async_pool() {
+            let audit_repo = crate::repo::audit_async::SqlxAuditRepo::new(pool);
+            let after_summary = serde_json::json!({
+                "classes": classes,
+                "hit_count": scrub.hits.len(),
+            });
+            let _ = audit_repo
+                .record(crate::repo::audit::AuditInput {
+                    actor_key_id: None,
+                    action: "ai_prompt.blocked",
+                    target: Some(user_hash),
+                    before: None,
+                    after: Some(&after_summary),
+                    ip: None,
+                })
+                .await;
+        }
         return Err("(消息中含敏感信息，已被合规策略拒绝处理)".to_string());
     }
     let scrubbed_content = InboundContent {

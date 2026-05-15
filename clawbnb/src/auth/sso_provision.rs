@@ -1,5 +1,10 @@
 //! Just-in-Time admin_key provisioning from SSO claims. v7.2.
 //!
+//! v7.5: gated behind `--features ee` (sibling to sso_session).
+
+#![cfg(feature = "ee")]
+
+//!
 //! When OIDC `verify_id_token` or SAML signature verify succeeds, we
 //! have a verified IdP claim set saying "this email belongs to this
 //! IdP-authenticated identity". JIT provisioning is the policy layer

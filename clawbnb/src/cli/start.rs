@@ -222,6 +222,16 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
             sched_shutdown,
         );
         info!("audit_scheduler started (run every 24h, 90-day retention)");
+
+        // v7.5 — SLA rollup driver. 5min windows, DB-derived
+        // error_rate; uptime + latency_p99 are 0 (phase 2 will wire
+        // Prometheus query API).
+        let sla_shutdown = shutdown_rx.clone();
+        let _sla_handle = crate::ee::sla_driver::spawn_sla_driver(
+            pool.clone(),
+            sla_shutdown,
+        );
+        info!("sla_driver started (5min windows, 90d retention, phase-1 metrics)");
     }
 
     // v7.4 M4.1: trust scoring driver. Scores every active user every

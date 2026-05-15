@@ -91,7 +91,32 @@ fn sessions() -> &'static SessionTable {
 impl ClaudeAcpSession {
     /// Spawn a new long-running claude-cli inside the sandbox.
     pub async fn spawn(sandbox: &Sandbox, cfg: &CliConfig) -> Result<Self, String> {
-        let args = build_acp_args(cfg);
+        let mut args = build_acp_args(cfg);
+
+        // v7.5 — wire ToolPolicy into the ACP spawn args too. Bug
+        // discovered during dead-code audit: per-message path called
+        // ToolPolicy::for_user but the ACP path didn't, so enabling
+        // --features acp silently disabled tool allowlist enforcement
+        // (Plan M2 "tool allowlist 双重落地" violation).
+        //
+        // Since the policy is per-user and the ACP session is long-
+        // lived per user, we read once at spawn — the policy is part
+        // of the session identity. If the policy changes via PUT
+        // /api/v1/users/{hash}/settings, the next inbound that triggers
+        // a respawn picks it up. For immediate-effect needs, operator
+        // would have to also kill the session (TODO: future
+        // policy-version invalidate signal).
+        let user_settings =
+            crate::ai::history::user_settings_json(sandbox.user_hash.as_str())
+                .await
+                .unwrap_or_else(|| serde_json::json!({}));
+        let policy = crate::ai::tool_policy::ToolPolicy::for_user(
+            sandbox.user_hash.as_str(),
+            &user_settings,
+        )
+        .await;
+        args.extend(policy.to_cli_args());
+
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let mut cmd = crate::sandbox::exec::build_claude_cmd(sandbox, &args_ref);
 

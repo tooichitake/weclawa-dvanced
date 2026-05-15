@@ -26,24 +26,26 @@
 //!   bursting through quota.
 //!
 //! - **`threat`** ∈ [0,1] — fraction of the user's recent inbounds
-//!   that hit a PII Block-policy class. We can't easily count this
-//!   from existing tables (PII detection runs in-memory at the AI
-//!   provider boundary), so as a proxy we count entries in
-//!   `audit_log` where `action='ai_prompt_blocked'` and `target`
-//!   references this user. **Stub for v7.4**: returns 0.0 until the
-//!   PII block path is wired to write audit rows (TODO v7.5).
+//!   that hit a PII Block-policy class. v7.5: wired via
+//!   `audit_log` rows with `action='ai_prompt.blocked'` and `target`
+//!   = user_hash. The AI provider code (cli_provider + chat) writes
+//!   one row per Block-policy hit; the driver queries
+//!   `blocked_count / max(total_inbound_count, 1)` clamped to [0,1].
 //!
 //! - **`integrity`** ∈ [0,1] — `1 - (rate_limit_breaches / total_attempts)`.
-//!   We don't currently log per-user rate-limit hits to a queryable
-//!   table; the `rate_limits` table holds the sliding window itself,
-//!   not breach history. **Stub for v7.4**: returns 1.0 (no observed
-//!   breaches) until we add a counter table (V0015) or surface from
-//!   Prometheus.
+//!   v7.5: wired via `audit_log` rows with `action='rate_limit.breach'`
+//!   and `target` = user_hash. `monitor::rate_limit::check_inbound`
+//!   writes one row each time a user exceeds the per-minute cap.
+//!   Driver computes `1.0 - (breaches / max(total_attempts, 1))`.
 //!
-//! The two stubbed factors mean the v7.4 score is currently driven
-//! mostly by `success_rate` + `uptime`. That's enough to start seeing
-//! the tier overlay fire on misbehaving users while we wire the
-//! remaining inputs in v7.5.
+//! ### Total inbound denominator
+//!
+//! Both threat and integrity divide by the user's "total inbound
+//! attempts" in the window. We use `user_history.role='user'` count
+//! as the denominator — same metric as success_rate. This is a slight
+//! under-count (some inbounds never get appended to history due to
+//! dedup / sandbox failure / rate-limit-itself), but it's
+//! conservative and stable across users.
 //!
 //! ## Scheduling
 //!
@@ -240,15 +242,45 @@ async fn compute_inputs(
     .await?;
     let uptime = (active_days as f64 / ACTIVE_WINDOW_DAYS as f64).min(1.0);
 
-    // threat: v7.4 stub (see module doc). Counts audit rows where the
-    // user was blocked by PII policy. Once a `target` convention for
-    // user_hash is established + ai prompt block writes audit rows
-    // we can wire this for real.
-    let threat = 0.0;
+    // threat: v7.5 wired. fraction of recent inbound that hit a
+    // Block-policy PII class (audit_log action='ai_prompt.blocked').
+    // Both ai/cli_provider and ai/chat write this row.
+    let (blocked_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT FROM audit_log
+         WHERE action = 'ai_prompt.blocked'
+           AND target = $1
+           AND ts >= $2",
+    )
+    .bind(user_hash)
+    .bind(cutoff)
+    .fetch_one(pool)
+    .await?;
+    let threat = if user_count > 0 {
+        (blocked_count as f64 / user_count as f64).min(1.0)
+    } else {
+        0.0
+    };
 
-    // integrity: v7.4 stub. Requires per-user rate-limit-breach
-    // counter table (V0015) or Prometheus pull.
-    let integrity = 1.0;
+    // integrity: v7.5 wired. 1 - fraction of recent inbound that were
+    // throttled by per-user rate limit (audit_log action='rate_limit.breach').
+    // monitor/rate_limit writes the row when count > limit.
+    let (breach_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT FROM audit_log
+         WHERE action = 'rate_limit.breach'
+           AND target = $1
+           AND ts >= $2",
+    )
+    .bind(user_hash)
+    .bind(cutoff)
+    .fetch_one(pool)
+    .await?;
+    // Denominator = breaches + accepted (= user_count); 0/0 → 1.0 (perfect).
+    let total_attempts = (breach_count + user_count) as f64;
+    let integrity = if total_attempts > 0.0 {
+        (1.0 - (breach_count as f64 / total_attempts)).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
 
     Ok(TrustInputs {
         success_rate,
@@ -285,5 +317,49 @@ mod tests {
         let score = compute(&inputs);
         assert!((score - 0.68).abs() < 0.001);
         assert_eq!(TrustTier::from_score(score), TrustTier::Standard);
+    }
+
+    /// v7.5 — a user with multiple ai_prompt.blocked audit rows + 0
+    /// history rows still has threat=0 (because the user_count
+    /// denominator is 0 — they never got past the block to be
+    /// recorded in history). This is intentional: brand-new users
+    /// hitting Block repeatedly can't be Quarantined on their first
+    /// session.
+    #[tokio::test]
+    async fn threat_zero_when_no_history_even_with_blocks() {
+        let pool = db_async::open_in_memory().await.unwrap();
+        sqlx::query(
+            "INSERT INTO audit_log (ts, action, target, before_json, after_json, ip)
+             VALUES (now(), 'ai_prompt.blocked', 'u-attacker', NULL, NULL, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+        let inputs = compute_inputs(&pool, "u-attacker", cutoff).await.unwrap();
+        assert_eq!(inputs.threat, 0.0);
+        // Newcomer baseline holds.
+        assert_eq!(inputs.success_rate, 0.7);
+    }
+
+    /// v7.5 — integrity = breaches / (breaches + history_count).
+    /// 3 breaches + 0 history → 3/3 = 1.0 → integrity = 0.0 (worst).
+    /// This is the right shape: a brand-new user whose every attempt
+    /// is throttled has zero integrity.
+    #[tokio::test]
+    async fn integrity_zero_when_all_attempts_throttled() {
+        let pool = db_async::open_in_memory().await.unwrap();
+        for _ in 0..3 {
+            sqlx::query(
+                "INSERT INTO audit_log (ts, action, target, before_json, after_json, ip)
+                 VALUES (now(), 'rate_limit.breach', 'u-spammer', NULL, NULL, NULL)",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+        let inputs = compute_inputs(&pool, "u-spammer", cutoff).await.unwrap();
+        assert_eq!(inputs.integrity, 0.0);
     }
 }

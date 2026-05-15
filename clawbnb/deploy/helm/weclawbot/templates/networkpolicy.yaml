@@ -1,0 +1,55 @@
+{{- /*
+NetworkPolicy — restricts ingress to the daemon Pod.
+
+By default the daemon listens on :18011 with no auth on /metrics +
+/healthz + /api/v1/billing/stripe-webhook + /api/v1/puppet/feishu/webhook.
+The first two are by Prometheus convention; the latter two are
+HMAC-verified at the handler. NetworkPolicy adds a defense layer:
+only the named Prometheus namespace + the Ingress controller can
+reach the Pod.
+
+Operators using an externally exposed service (not via Ingress) should
+add additional ipBlock rules below.
+
+Skipped if `daemon.networkPolicy.enabled` is false (default). Most dev
+clusters don't have a CNI that enforces NetworkPolicy (kind, docker-
+desktop) so we don't make it the default.
+*/}}
+{{- if and .Values.daemon.enabled .Values.daemon.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "weclawbot.fullname" . }}
+  labels:
+    {{- include "weclawbot.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "weclawbot.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # From Prometheus operator's prometheus Pod(s) in the configured
+    # namespace. Matches the kube-prometheus-stack convention.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.daemon.networkPolicy.prometheusNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: http
+          protocol: TCP
+    # From the Ingress controller (any namespace, label-matched).
+    # ingress-nginx tags its Pods with this label by default; for
+    # Traefik / other controllers, edit the selector below.
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}

@@ -290,4 +290,54 @@ mod tests {
     fn verify_hmac_rejects_bad_hex() {
         assert!(!verify_hmac("anything", "not-hex-zzz", "secret"));
     }
+
+    /// v7.5 — full end-to-end fixture: build a signed Stripe webhook
+    /// payload, call the actual `post_stripe_webhook` handler, assert
+    /// 200 + verify signature path. Doesn't exercise the
+    /// tenant-billing-status update (would need a seeded tenants row
+    /// + DB pool); that's covered by the dedicated tenants_async
+    /// tests. Here we confirm the wire-level handler accepts a
+    /// well-formed signed payload.
+    #[tokio::test]
+    async fn handler_accepts_well_formed_signed_payload() {
+        use axum::body::Bytes;
+        use axum::http::HeaderMap;
+
+        let secret = "whsec_e2e_test_secret";
+        // SAFETY: env mutation in test. Tests in this module run
+        // serialized by cargo's default behavior within a binary.
+        unsafe {
+            std::env::set_var("WECLAWBOT_STRIPE_WEBHOOK_SECRET", secret);
+        }
+
+        let ts = chrono::Utc::now().timestamp();
+        // event_type without status mapping → handler ignores after
+        // signature verify; we don't need a tenants row.
+        let body = r#"{"id":"evt_e2e","type":"ping","data":{"object":{}}}"#;
+        let signed_payload = format!("{ts}.{body}");
+        let sig = hmac_hex(&signed_payload, secret);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            STRIPE_SIGNATURE_HEADER,
+            format!("t={ts},v1={sig}").parse().unwrap(),
+        );
+
+        let result =
+            post_stripe_webhook(headers, Bytes::from(body.to_string())).await;
+        assert!(
+            result.is_ok(),
+            "expected handler to accept signed payload: {result:?}"
+        );
+
+        // Negative: tampered payload → 401 unauthorized
+        let mut bad_headers = HeaderMap::new();
+        bad_headers.insert(
+            STRIPE_SIGNATURE_HEADER,
+            format!("t={ts},v1=00000000").parse().unwrap(),
+        );
+        let bad =
+            post_stripe_webhook(bad_headers, Bytes::from(body.to_string())).await;
+        assert!(bad.is_err(), "expected handler to reject bad signature");
+    }
 }

@@ -67,23 +67,15 @@ pub fn record_sandbox_seconds(tenant: &TenantId, seconds: f64) {
     .increment(seconds as u64);
 }
 
-/// Record AI provider token usage. Called from claude/codex/api
-/// providers after a successful invocation when token counts are
-/// available in the response. `direction` is "input" or "output".
-pub fn record_ai_tokens(
-    tenant: &TenantId,
-    provider: &'static str,
-    direction: &'static str,
-    tokens: u64,
-) {
-    metrics::counter!(
-        "weclawbot_billing_ai_tokens_total",
-        "tenant_id" => tenant.as_str().to_string(),
-        "provider" => provider,
-        "direction" => direction
-    )
-    .increment(tokens);
-}
+// v7.5 housekeeping: `record_ai_tokens` removed — wiring it requires
+// parsing token counts out of claude-cli's stream-json output (which
+// emits them in a `usage` field per assistant turn) + the codex
+// equivalent + the OpenAI Chat Completions `usage` field. That's
+// a multi-provider data-plumbing change, separate from the rest of
+// billing_metering. Re-add when the token-extraction story is
+// uniform across providers; until then per-message + per-sandbox-
+// seconds counters cover the canonical "per-call" and
+// "per-compute" billing dimensions.
 
 #[cfg(test)]
 mod tests {
@@ -97,7 +89,6 @@ mod tests {
         let t = TenantId::default_tenant();
         record_inbound(&t, "ilink-wechat");
         record_sandbox_seconds(&t, 4.2);
-        record_ai_tokens(&t, "claude", "input", 1234);
-        record_ai_tokens(&t, "claude", "output", 567);
+        // record_ai_tokens removed in v7.5 — see free-fn block above.
     }
 }

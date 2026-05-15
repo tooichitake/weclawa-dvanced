@@ -141,10 +141,9 @@ pub fn exit(user_hash: &str) {
     })
 }
 
-pub fn touch_activity(user_hash: &str, mut sess: Session) {
-    sess.last_input_at = Some(Utc::now());
-    save(user_hash, &sess);
-}
+// v7.5 housekeeping: `touch_activity` removed (zero callers; the GC
+// path tracks `last_input_at` via session::save when dispatching menu
+// commands, not via a separate touch entry-point).
 
 /// Drop the session if it's stale. Call at the top of every console route.
 pub fn gc_expired(user_hash: &str) {

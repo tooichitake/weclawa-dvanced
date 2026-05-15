@@ -1,5 +1,11 @@
 //! Signed-cookie session for SSO flows (OIDC + SAML). v7.2.
 //!
+//! v7.5: gated behind `--features ee` since the only consumers
+//! (`service/sso` routes + ee SAML/OIDC handlers) are ee-only.
+
+#![cfg(feature = "ee")]
+
+//!
 //! ## 用途
 //!
 //! OIDC / SAML SP-initiated flow 都需要在 `init` 和 `callback` 之间持有

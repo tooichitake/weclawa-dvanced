@@ -36,6 +36,11 @@ pub mod oidc_callback;
 pub mod saml;
 pub mod saml_dsig;
 pub mod sla;
+// v7.5 — DB-derived SLA rollup driver. Reads `user_history` +
+// `audit_log` joined to `users.tenant_id`, upserts into `sla_rollup`
+// every 5 minutes. See `sla_driver.rs` doc for the phase-1/phase-2
+// split (phase 2 wants Prometheus query API for uptime + latency).
+pub mod sla_driver;
 // v7.3 housekeeping: `ee/sso.rs` (the dead `IdentityProvider` trait)
 // removed. v7.2 wired SSO via free functions in `service/sso.rs` +
 // `auth/sso_session.rs` + `auth/sso_provision.rs` — cleaner than the

@@ -96,6 +96,26 @@ pub async fn complete(
             "reason" => "pii_block_policy"
         )
         .increment(1);
+        // v7.5 — feeds `trust_driver`'s threat factor (see cli_provider
+        // sibling). Same action + target shape so the driver's
+        // GROUP BY catches both paths uniformly.
+        if let Some(pool) = crate::storage::db_async::try_global_async_pool() {
+            let audit_repo = crate::repo::audit_async::SqlxAuditRepo::new(pool);
+            let after_summary = serde_json::json!({
+                "provider": "chat",
+                "hit_count": scrub.hits.len(),
+            });
+            let _ = audit_repo
+                .record(crate::repo::audit::AuditInput {
+                    actor_key_id: None,
+                    action: "ai_prompt.blocked",
+                    target: Some(user_hash),
+                    before: None,
+                    after: Some(&after_summary),
+                    ip: None,
+                })
+                .await;
+        }
         return Err("(消息中含敏感信息，已被合规策略拒绝处理)".to_string());
     }
     let user_text = scrub.scrubbed.as_str();

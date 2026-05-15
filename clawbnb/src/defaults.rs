@@ -159,9 +159,9 @@ pub fn apply_defaults_to_user(user_hash: &str) -> Result<Option<Value>, String> 
     Ok(old)
 }
 
-pub fn user_settings_path(user_hash: &str) -> PathBuf {
-    layout::user_settings_path(user_hash)
-}
+// v7.5 housekeeping: `user_settings_path` wrapper removed (zero callers;
+// callers go through `Sandbox::settings_path` which delegates to
+// `layout::user_settings_path` directly).
 
 #[derive(Debug, Default)]
 pub struct MigrationReport {

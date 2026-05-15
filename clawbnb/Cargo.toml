@@ -195,6 +195,12 @@ tower = { version = "0.5", features = ["util"] }
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 
+# v7.5 — SAML integration test fixture builder. Generates self-signed
+# X.509 cert + RSA key at test runtime so we can sign a real
+# SAMLResponse and verify it round-trips through `ee::saml_dsig`. Only
+# in dev-deps so it doesn't bloat the production binary.
+rcgen = "0.13"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
