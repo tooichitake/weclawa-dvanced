@@ -33,7 +33,7 @@ impl SqlxUserRepo {
         )> = sqlx::query_as(
             "SELECT hash, user_id_hint, created_at, last_seen_at, message_count,
                     sync_state, last_sync_at, last_sync_error
-             FROM users WHERE hash = ?1",
+             FROM users WHERE hash = ?",
         )
         .bind(hash.as_str())
         .fetch_optional(&self.pool)
@@ -58,7 +58,7 @@ impl SqlxUserRepo {
         )> = sqlx::query_as(
             "SELECT hash, user_id_hint, created_at, last_seen_at, message_count,
                     sync_state, last_sync_at, last_sync_error
-             FROM users WHERE tenant_id = ?1 ORDER BY last_seen_at DESC NULLS LAST",
+             FROM users WHERE tenant_id = ? ORDER BY last_seen_at DESC NULLS LAST",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -76,7 +76,7 @@ impl SqlxUserRepo {
         sqlx::query(
             "INSERT INTO users (hash, user_id_hint, created_at, last_seen_at,
                                 message_count, sync_state, last_sync_at, last_sync_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(hash) DO UPDATE SET
                  user_id_hint = excluded.user_id_hint,
                  last_seen_at = excluded.last_seen_at,
@@ -100,9 +100,9 @@ impl SqlxUserRepo {
     }
 
     pub async fn touch_last_seen(&self, hash: &UserHash) -> Result<(), DbError> {
-        sqlx::query("UPDATE users SET last_seen_at = ?2 WHERE hash = ?1")
-            .bind(hash.as_str())
+        sqlx::query("UPDATE users SET last_seen_at = ? WHERE hash = ?")
             .bind(Utc::now().to_rfc3339())
+            .bind(hash.as_str())
             .execute(&self.pool)
             .await
             .map_err(|e| DbError::Pool(format!("sqlx user touch: {e}")))?;
@@ -110,7 +110,7 @@ impl SqlxUserRepo {
     }
 
     pub async fn incr_message_count(&self, hash: &UserHash) -> Result<(), DbError> {
-        sqlx::query("UPDATE users SET message_count = message_count + 1 WHERE hash = ?1")
+        sqlx::query("UPDATE users SET message_count = message_count + 1 WHERE hash = ?")
             .bind(hash.as_str())
             .execute(&self.pool)
             .await
@@ -125,13 +125,13 @@ impl SqlxUserRepo {
         error: Option<&str>,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "UPDATE users SET sync_state = ?2, last_sync_at = ?3, last_sync_error = ?4
-             WHERE hash = ?1",
+            "UPDATE users SET sync_state = ?, last_sync_at = ?, last_sync_error = ?
+             WHERE hash = ?",
         )
-        .bind(hash.as_str())
         .bind(state)
         .bind(Utc::now().to_rfc3339())
         .bind(error)
+        .bind(hash.as_str())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx user sync_state: {e}")))?;
@@ -139,7 +139,7 @@ impl SqlxUserRepo {
     }
 
     pub async fn delete(&self, hash: &UserHash) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM users WHERE hash = ?1")
+        let res = sqlx::query("DELETE FROM users WHERE hash = ?")
             .bind(hash.as_str())
             .execute(&self.pool)
             .await
@@ -151,7 +151,7 @@ impl SqlxUserRepo {
 
     pub async fn get_settings(&self, hash: &UserHash) -> Result<Option<Value>, DbError> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT settings_json FROM user_settings WHERE user_hash = ?1")
+            sqlx::query_as("SELECT settings_json FROM user_settings WHERE user_hash = ?")
                 .bind(hash.as_str())
                 .fetch_optional(&self.pool)
                 .await
@@ -170,7 +170,7 @@ impl SqlxUserRepo {
 
     pub async fn get_settings_version(&self, hash: &UserHash) -> Result<Option<i64>, DbError> {
         let row: Option<(i64,)> =
-            sqlx::query_as("SELECT version FROM user_settings WHERE user_hash = ?1")
+            sqlx::query_as("SELECT version FROM user_settings WHERE user_hash = ?")
                 .bind(hash.as_str())
                 .fetch_optional(&self.pool)
                 .await
@@ -187,7 +187,7 @@ impl SqlxUserRepo {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO user_settings (user_hash, settings_json, updated_at, version)
-             VALUES (?1, ?2, ?3, 1)
+             VALUES (?, ?, ?, 1)
              ON CONFLICT(user_hash) DO UPDATE SET
                  settings_json = excluded.settings_json,
                  updated_at = excluded.updated_at,
@@ -200,7 +200,7 @@ impl SqlxUserRepo {
         .await
         .map_err(|e| DbError::Pool(format!("sqlx settings upsert: {e}")))?;
         let row: (i64,) =
-            sqlx::query_as("SELECT version FROM user_settings WHERE user_hash = ?1")
+            sqlx::query_as("SELECT version FROM user_settings WHERE user_hash = ?")
                 .bind(hash.as_str())
                 .fetch_one(&self.pool)
                 .await
@@ -218,7 +218,7 @@ impl SqlxUserRepo {
     ) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO user_history (user_hash, role, content, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
+             VALUES (?, ?, ?, ?)",
         )
         .bind(hash.as_str())
         .bind(role)
@@ -238,7 +238,7 @@ impl SqlxUserRepo {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT role, content FROM (
                 SELECT role, content, id FROM user_history
-                WHERE user_hash = ?1 ORDER BY id DESC LIMIT ?2
+                WHERE user_hash = ? ORDER BY id DESC LIMIT ?
              ) ORDER BY id ASC",
         )
         .bind(hash.as_str())
@@ -253,7 +253,7 @@ impl SqlxUserRepo {
     }
 
     pub async fn clear_history(&self, hash: &UserHash) -> Result<u64, DbError> {
-        let res = sqlx::query("DELETE FROM user_history WHERE user_hash = ?1")
+        let res = sqlx::query("DELETE FROM user_history WHERE user_hash = ?")
             .bind(hash.as_str())
             .execute(&self.pool)
             .await
@@ -263,7 +263,7 @@ impl SqlxUserRepo {
 
     pub async fn history_count(&self, hash: &UserHash) -> Result<u64, DbError> {
         let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM user_history WHERE user_hash = ?1")
+            sqlx::query_as("SELECT COUNT(*) FROM user_history WHERE user_hash = ?")
                 .bind(hash.as_str())
                 .fetch_one(&self.pool)
                 .await
@@ -279,7 +279,7 @@ impl SqlxUserRepo {
     ) -> Result<Option<ConsoleSession>, DbError> {
         let row: Option<(i64, String, String)> = sqlx::query_as(
             "SELECT in_menu, current_path, last_input_at
-             FROM console_sessions WHERE user_hash = ?1",
+             FROM console_sessions WHERE user_hash = ?",
         )
         .bind(hash.as_str())
         .fetch_optional(&self.pool)
@@ -300,7 +300,7 @@ impl SqlxUserRepo {
         let path_json = serde_json::to_string(&session.current_path)?;
         sqlx::query(
             "INSERT INTO console_sessions (user_hash, in_menu, current_path, last_input_at)
-             VALUES (?1, ?2, ?3, ?4)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT(user_hash) DO UPDATE SET
                  in_menu = excluded.in_menu,
                  current_path = excluded.current_path,
@@ -317,7 +317,7 @@ impl SqlxUserRepo {
     }
 
     pub async fn clear_console_session(&self, hash: &UserHash) -> Result<(), DbError> {
-        sqlx::query("DELETE FROM console_sessions WHERE user_hash = ?1")
+        sqlx::query("DELETE FROM console_sessions WHERE user_hash = ?")
             .bind(hash.as_str())
             .execute(&self.pool)
             .await

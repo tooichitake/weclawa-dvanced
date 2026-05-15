@@ -23,7 +23,7 @@ impl SqlxAuditRepo {
         let res = sqlx::query(
             "INSERT INTO audit_log
                  (ts, actor_key_id, action, target, before_json, after_json, ip)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&ts)
         .bind(input.actor_key_id)
@@ -46,7 +46,7 @@ impl SqlxAuditRepo {
         let rows: Vec<(i64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>)> =
             sqlx::query_as(
                 "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
-                 FROM audit_log WHERE tenant_id = ?1 ORDER BY id DESC LIMIT ?2",
+                 FROM audit_log WHERE tenant_id = ? ORDER BY id DESC LIMIT ?",
             )
             .bind(tenant_id)
             .bind(limit as i64)

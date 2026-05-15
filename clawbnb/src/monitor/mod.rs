@@ -12,6 +12,8 @@
 
 pub mod common;
 pub mod dedup;
+#[cfg(feature = "discord-gateway")]
+pub mod discord_gateway_monitor;
 pub mod forward;
 pub mod handler;
 pub mod telegram_poller;

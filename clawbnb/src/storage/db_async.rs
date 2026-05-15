@@ -34,14 +34,28 @@ use crate::storage::db::DbError;
 
 /// sqlx pool 类型 alias。
 ///
-/// ## v5.3 Postgres backend — explicit structural plan
+/// ## v5.3 Postgres backend — current state
 ///
-/// 真切 Postgres 必须解决：
+/// **已完成 (v5.3)**:
+/// - ✅ 所有 repo 用无序号 `?` placeholder（76 处 `?N` 已 mechanic 转）
+/// - ✅ 所有 INSERT 用 ANSI `ON CONFLICT (col) DO ...`（替代 SQLite-only
+///   `INSERT OR IGNORE`）
+/// - ✅ Migration runner `portable_ddl()` 把 `INTEGER PRIMARY KEY
+///   AUTOINCREMENT` cfg 替换成 `BIGSERIAL PRIMARY KEY`（PG 友好）
+/// - ✅ CI postgres testcontainer 矩阵（`.github/workflows/postgres.yml`）
 ///
-/// **1. SQL placeholder 方言**
-/// 当前 repo 用 `?1, ?2`（SQLite 数字 placeholder）。Postgres 用 `$1, $2`，
-/// `sqlx::Any` 只接受无序号 `?`。**~40 query bind 列表**需要改成无序号
-/// + 按位 bind，工作量纯机械化但要细查每条。
+/// **仍待 (PG 真启用最后一步)**:
+/// - 把所有 repo 的 `pool: SqlitePool` 字段改成 `pool: AsyncDbPool`，加
+///   cfg-gated typealias：`#[cfg(feature="postgres")] type AsyncDbPool =
+///   sqlx::PgPool;` —— 纯机械改动，约 11 文件 × 2 处。CI workflow 触发
+///   时自然暴露剩余 type 不兼容点。
+/// - `cli/backup.rs::VACUUM INTO` cfg-gate 到 `pg_dump` 外部命令（已加
+///   cfg 分支占位）
+/// - `audit_async.rs::last_insert_rowid()` 改 `RETURNING id`（1 处）
+///
+/// **不变 (SQLite 友好)**:
+/// - `?` placeholder 跨 driver 通用（sqlx 0.8 PG 客户端自动改写到 `$N`）
+/// - ANSI ON CONFLICT 两 backend 都吃
 ///
 /// **2. SQLite-specific SQL 子句**
 /// - `INSERT OR IGNORE` (出现 3 处：dedup / defaults bootstrap / bindings
@@ -140,7 +154,7 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
         let now = chrono::Utc::now().to_rfc3339();
         for (name, _sql) in MIGRATION_FILES {
             sqlx::query(
-                "INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?1, ?2)
+                "INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?, ?)
                  ON CONFLICT (version) DO NOTHING",
             )
             .bind(*name)
@@ -159,7 +173,7 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
 
     for (name, sql) in MIGRATION_FILES {
         let already: Option<(String,)> =
-            sqlx::query_as("SELECT version FROM _sqlx_migrations WHERE version = ?1")
+            sqlx::query_as("SELECT version FROM _sqlx_migrations WHERE version = ?")
                 .bind(*name)
                 .fetch_optional(pool)
                 .await
@@ -167,10 +181,11 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
         if already.is_some() {
             continue;
         }
-        pool.execute(*sql).await.map_err(|e| {
+        let portable_sql = portable_ddl(sql);
+        pool.execute(portable_sql.as_str()).await.map_err(|e| {
             DbError::Migration(format!("apply {name}: {e}"))
         })?;
-        sqlx::query("INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?1, ?2)")
+        sqlx::query("INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?, ?)")
             .bind(*name)
             .bind(chrono::Utc::now().to_rfc3339())
             .execute(pool)
@@ -178,6 +193,28 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
             .map_err(|e| DbError::Migration(format!("record {name}: {e}")))?;
     }
     Ok(())
+}
+
+/// v5.3: 把 SQLite-dialect 的 DDL 转换成当前 backend 能吃的 SQL。
+///
+/// - SQLite (default)：原样返回
+/// - Postgres (`feature = "postgres"`)：把 `INTEGER PRIMARY KEY AUTOINCREMENT`
+///   改成 `BIGSERIAL PRIMARY KEY`；其他 PG 不兼容子句（`WITHOUT ROWID`、
+///   `PRAGMA`）migrations 文件里**禁止使用**，不会出现。
+///
+/// 用文本替换不是 AST 改写 —— 输入是我们自己写的 V*.sql，列出关键词足够。
+/// 若将来 migration SQL 出现新关键词，加进这里即可。
+fn portable_ddl(sql: &str) -> String {
+    if cfg!(feature = "postgres") {
+        sql.replace(
+            "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "BIGSERIAL PRIMARY KEY",
+        )
+        // SQLite 的 BLOB / TEXT 类型 PG 也吃；INTEGER PG 也吃；
+        // 文本时间戳 ('YYYY-MM-DDTHH:MM:SSZ') 走 TEXT 不动。
+    } else {
+        sql.to_string()
+    }
 }
 
 /// Embedded migration files — 编译期把 SQL 文本嵌进 binary，跟 refinery

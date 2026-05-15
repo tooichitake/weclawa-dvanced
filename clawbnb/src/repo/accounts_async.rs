@@ -32,7 +32,7 @@ impl SqlxAccountRepo {
         )> = sqlx::query_as(
             "SELECT account_id, token, token_ciphertext, token_nonce,
                     base_url, weixin_user_id, saved_at, platform_id
-             FROM accounts WHERE account_id = ?1",
+             FROM accounts WHERE account_id = ?",
         )
         .bind(id.as_str())
         .fetch_optional(&self.pool)
@@ -75,7 +75,7 @@ impl SqlxAccountRepo {
         )> = sqlx::query_as(
             "SELECT account_id, token, token_ciphertext, token_nonce,
                     base_url, weixin_user_id, saved_at, platform_id
-             FROM accounts WHERE tenant_id = ?1 ORDER BY saved_at DESC",
+             FROM accounts WHERE tenant_id = ? ORDER BY saved_at DESC",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -99,7 +99,7 @@ impl SqlxAccountRepo {
             "INSERT INTO accounts
                  (account_id, token, token_ciphertext, token_nonce,
                   base_url, weixin_user_id, saved_at, platform_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(account_id) DO UPDATE SET
                  token            = excluded.token,
                  token_ciphertext = excluded.token_ciphertext,
@@ -124,7 +124,7 @@ impl SqlxAccountRepo {
     }
 
     pub async fn delete(&self, id: &AccountId) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM accounts WHERE account_id = ?1")
+        let res = sqlx::query("DELETE FROM accounts WHERE account_id = ?")
             .bind(id.as_str())
             .execute(&self.pool)
             .await
@@ -146,17 +146,17 @@ impl SqlxAccountRepo {
         };
         let res = sqlx::query(
             "UPDATE accounts
-             SET token = ?2,
-                 token_ciphertext = ?3,
-                 token_nonce = ?4,
-                 saved_at = ?5
-             WHERE account_id = ?1",
+             SET token = ?,
+                 token_ciphertext = ?,
+                 token_nonce = ?,
+                 saved_at = ?
+             WHERE account_id = ?",
         )
-        .bind(id.as_str())
         .bind(new_token.expose())
         .bind(&ct)
         .bind(&nonce)
         .bind(Utc::now().to_rfc3339())
+        .bind(id.as_str())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx rotate: {e}")))?;
@@ -165,7 +165,7 @@ impl SqlxAccountRepo {
 
     pub async fn get_tenant_id(&self, id: &AccountId) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT tenant_id FROM accounts WHERE account_id = ?1")
+            sqlx::query_as("SELECT tenant_id FROM accounts WHERE account_id = ?")
                 .bind(id.as_str())
                 .fetch_optional(&self.pool)
                 .await

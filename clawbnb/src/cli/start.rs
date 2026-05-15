@@ -156,10 +156,36 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
                     crate::monitor::telegram_poller::run_telegram_monitor(bot, id, rx),
                 ));
             }
-            "discord" | "feishu" => {
+            "discord" => {
+                // v5.3: Discord Gateway WebSocket monitor (feature-gated)
+                #[cfg(feature = "discord-gateway")]
+                {
+                    if let Some(token) = acct.token.as_ref() {
+                        let bot = Arc::new(crate::puppet::discord::DiscordBot::new());
+                        let tok = token.clone();
+                        handles.push(tokio::spawn(
+                            crate::monitor::discord_gateway_monitor::run_discord_monitor(
+                                bot, id.clone(), tok, rx,
+                            ),
+                        ));
+                        info!("[{id}] platform=discord — gateway monitor started");
+                    } else {
+                        info!("[{id}] platform=discord — no token, skipping gateway");
+                    }
+                }
+                #[cfg(not(feature = "discord-gateway"))]
+                {
+                    info!(
+                        "[{id}] platform=discord — discord-gateway feature not enabled; \
+                         rebuild with --features discord-gateway to enable gateway monitor"
+                    );
+                }
+            }
+            "feishu" => {
+                // v5.3: Feishu 走 HTTP webhook route (service::feishu_webhook).
+                // 这里只 log，inbound 通过 /api/v1/puppet/feishu/webhook/<id> 入。
                 info!(
-                    "[{id}] platform={} uses gateway/webhook (no poll loop)",
-                    acct.platform_id
+                    "[{id}] platform=feishu — inbound via /api/v1/puppet/feishu/webhook/{id}"
                 );
             }
             _ => {

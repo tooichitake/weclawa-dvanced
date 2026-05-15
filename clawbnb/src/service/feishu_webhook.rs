@@ -81,20 +81,41 @@ pub async fn post_feishu_webhook(
         }
     };
 
-    // v5.3: 真 dispatch 到 feishu_handler（mirror telegram_handler 模式）
-    // 当前只 log 入站事件 ── 让 webhook 路由可测，handler 完整实施留 v5.3。
-    tracing::info!(
-        "[{account_id}] feishu inbound: user={} msg_id={} text={:?}",
-        common.user_id,
-        common.msg_id,
-        common.text.chars().take(50).collect::<String>()
-    );
-    metrics::counter!(
-        "weclawbot_inbound_messages_total",
-        "platform" => "feishu",
-        "status" => "received_pending_dispatch"
-    )
-    .increment(1);
+    // v5.3: 真 dispatch 到 feishu_handler。读 account 拿 token + base_url
+    // （Feishu API URL — Feishu 国内 vs Lark 海外双品牌）。account 找不到
+    // → 200 让 Feishu 不重试，但 daemon log warn（operator 配置不对）。
+    let acct = match crate::auth::accounts::load_account(&account_id) {
+        Some(a) => a,
+        None => {
+            tracing::warn!(
+                "[{account_id}] feishu webhook: account not configured — dropping event"
+            );
+            return (
+                StatusCode::OK,
+                Json(json!({"code": 0, "msg": "account not configured"})),
+            );
+        }
+    };
+    let token = match acct.token.as_ref() {
+        Some(t) => t.clone(),
+        None => {
+            tracing::warn!(
+                "[{account_id}] feishu webhook: account has no token — dropping event"
+            );
+            return (
+                StatusCode::OK,
+                Json(json!({"code": 0, "msg": "account has no token"})),
+            );
+        }
+    };
+    let base_url = acct.base_url.clone().unwrap_or_default();
+
+    let bot = std::sync::Arc::new(crate::puppet::feishu::FeishuBot::new());
+    // dispatch async — Feishu 期望 webhook fast-200，否则它会重试。
+    // 真处理推到 background task。dedup 防 redeliver 内已经 idempotent。
+    tokio::spawn(async move {
+        crate::puppet::feishu_handler::handle_inbound_event(bot, common, &base_url, &token).await;
+    });
 
     (StatusCode::OK, Json(json!({"code": 0})))
 }

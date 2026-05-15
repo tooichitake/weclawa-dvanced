@@ -48,7 +48,7 @@ impl SqlxTenantRepo {
         sqlx::query_as::<_, AsyncTenant>(
             "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
                     billing_status, billing_period_end, last_billing_event, last_billing_event_at
-             FROM tenants WHERE id = ?1",
+             FROM tenants WHERE id = ?",
         )
         .bind(id.as_str())
         .fetch_optional(&self.pool)
@@ -68,13 +68,13 @@ impl SqlxTenantRepo {
                 WHEN billing_status = 'active' THEN 1
                 WHEN billing_status = 'pending'
                      AND grace_until IS NOT NULL
-                     AND grace_until > ?2 THEN 1
+                     AND grace_until > ? THEN 1
                 ELSE 0
              END
-             FROM tenants WHERE id = ?1",
+             FROM tenants WHERE id = ?",
         )
-        .bind(id.as_str())
         .bind(&now_rfc)
+        .bind(id.as_str())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx is_active: {e}")))?;
@@ -91,10 +91,10 @@ impl SqlxTenantRepo {
         let now = chrono::Utc::now().to_rfc3339();
         let res = sqlx::query(
             "UPDATE tenants
-             SET billing_status = ?1,
-                 last_billing_event = ?2,
-                 last_billing_event_at = ?3
-             WHERE id = ?4",
+             SET billing_status = ?,
+                 last_billing_event = ?,
+                 last_billing_event_at = ?
+             WHERE id = ?",
         )
         .bind(billing_status)
         .bind(event_type)
@@ -113,7 +113,7 @@ impl SqlxTenantRepo {
         sqlx::query_as::<_, AsyncTenant>(
             "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
                     billing_status, billing_period_end, last_billing_event, last_billing_event_at
-             FROM tenants WHERE stripe_customer_id = ?1",
+             FROM tenants WHERE stripe_customer_id = ?",
         )
         .bind(customer_id)
         .fetch_optional(&self.pool)
@@ -174,7 +174,7 @@ mod tests {
         .await
         .unwrap();
         let future = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339();
-        sqlx::query("UPDATE tenants SET grace_until = ?1 WHERE id = 'default'")
+        sqlx::query("UPDATE tenants SET grace_until = ? WHERE id = 'default'")
             .bind(&future)
             .execute(&r.pool)
             .await

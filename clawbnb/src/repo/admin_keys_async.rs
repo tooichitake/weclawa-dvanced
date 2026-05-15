@@ -58,7 +58,7 @@ impl SqlxAdminKeyRepo {
     /// 它不阻塞当前请求的 handler 链。
     pub async fn touch_last_used(&self, id: &str) -> Result<(), DbError> {
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("UPDATE admin_keys SET last_used_at = ?1 WHERE id = ?2")
+        sqlx::query("UPDATE admin_keys SET last_used_at = ? WHERE id = ?")
             .bind(&now)
             .bind(id)
             .execute(&self.pool)

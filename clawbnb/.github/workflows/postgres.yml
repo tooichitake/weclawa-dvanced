@@ -1,0 +1,91 @@
+name: Postgres backend (v5.3)
+
+# v5.3: 跑 `cargo test --features postgres`，把 sqlx 后端切到 PG 驱动。
+# 即便所有 repo 当前仍 hard-code `pool: SqlitePool`（PG 真启用最后一步留
+# 在 mechanic PR），本 workflow 验证：
+#
+#   1. `--features postgres` 编译通过（sqlx PG driver 加入 deps tree）
+#   2. `portable_ddl()` SQL 重写在 PG dialect 下 syntactically valid
+#   3. `pg_dump` / `psql` 在 backup/restore 路径中 cfg 分支不破坏 default build
+#
+# Postgres testcontainer 在 services: 下起，env DATABASE_URL 注入。
+# 真正切 PG 后端的 integration test 留 follow-up PR 写 —— 当前只确保
+# 编译矩阵不退化。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weclawbot
+          POSTGRES_PASSWORD: weclawbot
+          POSTGRES_DB: weclawbot_test
+        ports:
+          - 5432:5432
+        # health check ensures the runner waits until PG accepts connections
+        options: >-
+          --health-cmd "pg_isready -U weclawbot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # sqlx tests pick up DATABASE_URL when running against postgres pool
+      DATABASE_URL: postgres://weclawbot:weclawbot@localhost:5432/weclawbot_test
+      WECLAWBOT_PG_URL: postgres://weclawbot:weclawbot@localhost:5432/weclawbot_test
+    defaults:
+      run:
+        working-directory: clawbnb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install postgres client (pg_dump/psql for backup CLI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clawbnb/target
+          key: cargo-pg-${{ runner.os }}-${{ hashFiles('clawbnb/**/Cargo.lock') }}
+          restore-keys: cargo-pg-${{ runner.os }}-
+
+      - name: cargo build --features postgres
+        run: cargo build --release --features postgres
+
+      - name: cargo test --features postgres
+        # 当前所有 _async repo 仍 hard-code `pool: SqlitePool` —— 这一步会
+        # 跑 SQLite-only 测试。一旦后续 PR 把 `pool: SqlitePool` 切成
+        # `pool: AsyncDbPool` (cfg-gated)，本 step 自动 exercise PG 驱动。
+        run: cargo test --release --features postgres
+
+      - name: cargo build all feature combinations
+        # 健康检查：所有 feature 组合编译。失败会捕获 cfg-gating
+        # （portable_ddl / backup.rs / AsyncDbPool typealias）破坏单一
+        # build 的 case。
+        run: |
+          cargo build --release
+          cargo build --release --features acp
+          cargo build --release --features ee
+          cargo build --release --features otel
+          cargo build --release --features discord-gateway
+          cargo build --release --features postgres
+          cargo build --release --features "ee,otel"
+          cargo build --release --features "postgres,discord-gateway"

@@ -30,7 +30,7 @@ impl SqlxDedupRepo {
         let res = sqlx::query(
             "INSERT INTO seen_messages
                  (msg_id, first_seen_at, tenant_id, account_id)
-             VALUES (?1, ?2, ?3, ?4)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT (msg_id) DO NOTHING",
         )
         .bind(msg_id)
@@ -51,7 +51,7 @@ impl SqlxDedupRepo {
 
     /// 撤销 mark — sandbox::ensure 失败后 unmark 让 redeliver 重试。
     pub async fn unmark(&self, msg_id: i64) -> Result<(), DbError> {
-        sqlx::query("DELETE FROM seen_messages WHERE msg_id = ?1")
+        sqlx::query("DELETE FROM seen_messages WHERE msg_id = ?")
             .bind(msg_id)
             .execute(&self.pool)
             .await
@@ -61,7 +61,7 @@ impl SqlxDedupRepo {
 
     /// 削峰 — 删 first_seen_at < cutoff 的老行。1% lazy prune 同 sync 版本。
     pub async fn prune_older_than(&self, cutoff: &str) -> Result<u64, DbError> {
-        let res = sqlx::query("DELETE FROM seen_messages WHERE first_seen_at < ?1")
+        let res = sqlx::query("DELETE FROM seen_messages WHERE first_seen_at < ?")
             .bind(cutoff)
             .execute(&self.pool)
             .await

@@ -19,7 +19,7 @@ impl SqlxBindingRepo {
     pub async fn get(&self, user: &WeixinUserId) -> Result<Option<Binding>, DbError> {
         let row: Option<(String, String, String)> = sqlx::query_as(
             "SELECT active_account_id, agent_id, updated_at
-             FROM bindings WHERE weixin_user_id = ?1",
+             FROM bindings WHERE weixin_user_id = ?",
         )
         .bind(user.as_str())
         .fetch_optional(&self.pool)
@@ -45,7 +45,7 @@ impl SqlxBindingRepo {
         let res = sqlx::query(
             "INSERT INTO bindings
                  (weixin_user_id, active_account_id, agent_id, updated_at)
-             VALUES (?1, ?2, ?3, ?4)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT (weixin_user_id) DO NOTHING",
         )
         .bind(user.as_str())
@@ -56,9 +56,9 @@ impl SqlxBindingRepo {
         .await
         .map_err(|e| DbError::Pool(format!("sqlx binding insert: {e}")))?;
         if res.rows_affected() == 0 {
-            sqlx::query("UPDATE bindings SET updated_at = ?2 WHERE weixin_user_id = ?1")
-                .bind(user.as_str())
+            sqlx::query("UPDATE bindings SET updated_at = ? WHERE weixin_user_id = ?")
                 .bind(&now)
+                .bind(user.as_str())
                 .execute(&self.pool)
                 .await
                 .map_err(|e| DbError::Pool(format!("sqlx binding touch: {e}")))?;
@@ -73,12 +73,12 @@ impl SqlxBindingRepo {
     ) -> Result<bool, DbError> {
         let now = Utc::now().to_rfc3339();
         let res = sqlx::query(
-            "UPDATE bindings SET active_account_id = ?2, updated_at = ?3
-             WHERE weixin_user_id = ?1",
+            "UPDATE bindings SET active_account_id = ?, updated_at = ?
+             WHERE weixin_user_id = ?",
         )
-        .bind(user.as_str())
         .bind(active_account_id.as_str())
         .bind(&now)
+        .bind(user.as_str())
         .execute(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx binding rebind: {e}")))?;
@@ -86,7 +86,7 @@ impl SqlxBindingRepo {
     }
 
     pub async fn delete(&self, user: &WeixinUserId) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM bindings WHERE weixin_user_id = ?1")
+        let res = sqlx::query("DELETE FROM bindings WHERE weixin_user_id = ?")
             .bind(user.as_str())
             .execute(&self.pool)
             .await
@@ -134,7 +134,7 @@ mod tests {
     async fn seed_account(pool: &SqlitePool, id: &str) {
         sqlx::query(
             "INSERT INTO accounts (account_id, base_url, saved_at)
-             VALUES (?1, ?2, ?3)",
+             VALUES (?, ?, ?)",
         )
         .bind(id)
         .bind("https://ilinkai.weixin.qq.com")

@@ -137,7 +137,7 @@ impl AuditArchiver for SqliteAuditArchiver {
             sqlx::query_as(
                 "SELECT id, ts, actor_key_id, action, target, before_json, after_json, ip
                  FROM audit_log
-                 WHERE tenant_id = ?1 AND ts < ?2
+                 WHERE tenant_id = ? AND ts < ?
                  ORDER BY id ASC",
             )
             .bind(&tenant_str)
