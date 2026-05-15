@@ -36,6 +36,9 @@ acp = []
 # 本期保留 flag 占位，让 Cargo 编译时检测到这条路径存在；真切换给 v5.1。
 postgres = ["sqlx/postgres"]
 
+# v5.2 O3 — Discord Gateway WebSocket support.
+discord-gateway = ["dep:tokio-tungstenite", "dep:futures"]
+
 # v3 Enterprise Edition — `ee/` 子树 (PostHog 模式)。MIT 主线保持精简，
 # ee/ 下放 SSO/SAML/SLA monitoring/advanced RBAC 等"商业级"特性。
 # 默认 off，hosted SaaS 部署时 `--features ee` 编进 binary。Open-source
@@ -133,6 +136,12 @@ opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio"]
 # stick with admin keys). JWKS endpoint fetch is via reqwest (already
 # in tree); jsonwebtoken handles RS256/ES256 verify.
 jsonwebtoken = { version = "9", optional = true }
+
+# v5.2 O3 — Discord Gateway WebSocket. tokio-tungstenite 是 tungstenite
+# 的 tokio async wrapper，rustls-tls 让 binary 不依赖系统 OpenSSL。
+# 用 `discord-gateway` feature gate 避免主线 binary 都强加 ~500KB ws 依赖。
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
+futures = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

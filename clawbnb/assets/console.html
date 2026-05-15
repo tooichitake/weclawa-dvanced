@@ -672,34 +672,54 @@ const tabs = {
 // /api/v1/tenants/list 路由 (留 v5.2)，本期只渲染 "default" tenant 占位
 // 让 super_admin 看到面板能 navigate，配置真改还得走 SQL。
 async function loadTenants() {
+  // v5.2 O5: 真后端 — GET /api/v1/tenants 返回所有 tenant 行。
   const el = document.getElementById('tenants-list');
-  el.innerHTML = `
-    <table class="kv">
-      <tr><th>id</th><th>name</th><th>status</th><th>billing_status</th><th>stripe_customer_id</th></tr>
-      <tr><td><code>default</code></td><td>Default Tenant</td>
-          <td><span class="badge badge-ok">active</span></td>
-          <td><span class="badge badge-ok">active</span></td>
-          <td class="small">(unset)</td></tr>
-    </table>
-    <p class="small" style="margin-top:10px;">
-      v5.1: list_tenants HTTP 路由留 v5.2；本期通过 <code>weclawbot</code> CLI 或直接
-      <code>SELECT * FROM tenants</code> 查看 + <code>UPDATE</code> 改配置。
-    </p>`;
+  try {
+    const r = await api('GET', '/api/v1/tenants');
+    const list = r.tenants || [];
+    if (list.length === 0) {
+      el.innerHTML = '<div class="empty">没有 tenant 行（基础 schema 包含 default 兜底，缺失说明 DB 未初始化）。</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table class="kv">
+        <tr><th>id</th><th>name</th><th>status</th><th>billing_status</th>
+            <th>stripe_customer_id</th><th>created_at</th></tr>
+        ${list.map(t => `<tr>
+          <td><code>${esc(t.id)}</code></td>
+          <td>${esc(t.name)}</td>
+          <td><span class="badge ${t.status === 'active' ? 'badge-ok' : 'badge-err'}">${esc(t.status)}</span></td>
+          <td><span class="badge ${t.billing_status === 'active' ? 'badge-ok' : (t.billing_status === 'suspended' ? 'badge-err' : 'badge-warn')}">${esc(t.billing_status)}</span></td>
+          <td class="small">${esc(t.stripe_customer_id || '(unset)')}</td>
+          <td class="small">${esc(t.created_at)}</td>
+        </tr>`).join('')}
+      </table>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">加载失败: ${esc(String(e))}</div>`;
+  }
 }
 
 async function loadBilling() {
+  // v5.2 O5: 真后端 — 复用 /tenants 数据，前端按 billing_status 重排展示。
   const el = document.getElementById('billing-tenants-list');
-  el.innerHTML = `
-    <table class="kv">
-      <tr><th>tenant</th><th>billing_status</th><th>period_end</th><th>last_event</th></tr>
-      <tr><td><code>default</code></td>
-          <td><span class="badge badge-ok">active</span></td>
-          <td class="small">(unset)</td>
-          <td class="small">(none)</td></tr>
-    </table>
-    <p class="small" style="margin-top:10px;">
-      v5.1: list 接口留 v5.2；webhook 入站事件实时更新 DB。
-    </p>`;
+  try {
+    const r = await api('GET', '/api/v1/tenants');
+    const list = r.tenants || [];
+    el.innerHTML = `
+      <table class="kv">
+        <tr><th>tenant</th><th>billing_status</th><th>period_end</th>
+            <th>last_event</th><th>last_event_at</th></tr>
+        ${list.map(t => `<tr>
+          <td><code>${esc(t.id)}</code></td>
+          <td><span class="badge ${t.billing_status === 'active' ? 'badge-ok' : (t.billing_status === 'suspended' ? 'badge-err' : 'badge-warn')}">${esc(t.billing_status)}</span></td>
+          <td class="small">${esc(t.billing_period_end || '(unset)')}</td>
+          <td class="small">${esc(t.last_billing_event || '(none)')}</td>
+          <td class="small">${esc(t.last_billing_event_at || '(none)')}</td>
+        </tr>`).join('')}
+      </table>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">加载失败: ${esc(String(e))}</div>`;
+  }
 }
 
 async function loadSso() {

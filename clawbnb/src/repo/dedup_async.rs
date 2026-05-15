@@ -26,10 +26,12 @@ impl SqlxDedupRepo {
         msg_id: i64,
     ) -> Result<bool, DbError> {
         let now = chrono::Utc::now().to_rfc3339();
+        // v5.2 O2: ANSI ON CONFLICT (SQLite 3.24+ / Postgres)
         let res = sqlx::query(
-            "INSERT OR IGNORE INTO seen_messages
+            "INSERT INTO seen_messages
                  (msg_id, first_seen_at, tenant_id, account_id)
-             VALUES (?1, ?2, ?3, ?4)",
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (msg_id) DO NOTHING",
         )
         .bind(msg_id)
         .bind(&now)

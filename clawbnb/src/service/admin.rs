@@ -270,6 +270,53 @@ pub async fn list_audit(
     Ok(Json(json!({"entries": view, "limit": limit })))
 }
 
+// --- v5.2 O5: tenants + billing list routes -------------------------------
+
+/// `GET /api/v1/tenants` — super_admin lists every tenant + billing status.
+pub async fn list_tenants(req: Request) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let ctx = ctx_of(&req)?;
+    require(&ctx, Role::SuperAdmin)?;
+    let pool = db_async::try_global_async_pool()
+        .ok_or_else(|| internal_str("async pool not initialized".to_string()))?;
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
+                billing_status, billing_period_end, last_billing_event, last_billing_event_at
+         FROM tenants ORDER BY created_at ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| internal_str(format!("sqlx list_tenants: {e}")))?;
+    let view: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, name, created_at, status, customer, deleted_at, bs, period_end, last_event, last_event_at)| {
+            json!({
+                "id": id,
+                "name": name,
+                "created_at": created_at,
+                "status": status,
+                "stripe_customer_id": customer,
+                "deleted_at": deleted_at,
+                "billing_status": bs,
+                "billing_period_end": period_end,
+                "last_billing_event": last_event,
+                "last_billing_event_at": last_event_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "tenants": view })))
+}
+
 // --- /admin/backup --------------------------------------------------------
 
 pub async fn trigger_backup(req: Request) -> Result<Json<Value>, (StatusCode, Json<Value>)> {

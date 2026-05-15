@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod billing;
+pub mod feishu_webhook;
 pub mod operator;
 pub mod page;
 pub mod sysconfig;

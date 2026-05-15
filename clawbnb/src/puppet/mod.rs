@@ -34,6 +34,8 @@ use crate::api::types::{QrCodeResponse, QrStatusResponse, GetUpdatesResp};
 use crate::error::WeclawError;
 
 pub mod discord;
+#[cfg(feature = "discord-gateway")]
+pub mod discord_gateway;
 pub mod discord_inbound;
 pub mod feishu;
 pub mod feishu_inbound;

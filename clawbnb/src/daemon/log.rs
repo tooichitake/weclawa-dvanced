@@ -13,11 +13,22 @@ pub fn current_log_path() -> std::path::PathBuf {
     logs_dir().join(format!("weclawbot-{date}.log"))
 }
 
+/// v5.2 O1: daemon log init — Registry-based 可组合 layer stack。
+///
+/// 之前 `setup_file_logging` 只挂一个 file fmt layer。v5.2 改成
+/// Registry pattern：fmt layer (file 或 stdout) + EnvFilter + OTel
+/// bridge layer (when `--features otel`) 都通过 `.with(...)` 组合，
+/// `observability::otel::init` 不再需要单独 set_global_tracer_provider
+/// 跟 daemon::log 抢主 subscriber。
+///
+/// 设计要点：
+/// - **file layer**：JSON 不行就 fmt layer 写 daily log file，跟之前一致
+/// - **OTel layer**：cfg(feature="otel") 时通过 `attach_otel_layer` 注入
+///   tracing-opentelemetry layer，bridge tracing::info_span! → OTel span
+/// - **stdout fallback**：file open 失败兜底
 pub fn setup_file_logging() {
     let dir = logs_dir();
     let _ = fs::create_dir_all(&dir);
-
-    // 启动时顺手清一次老 log（best-effort，错误只 log 不阻塞 boot）
     cleanup_old_logs();
 
     let path = current_log_path();
@@ -26,29 +37,41 @@ pub fn setup_file_logging() {
         .append(true)
         .open(&path);
 
-    match file {
-        Ok(f) => {
-            use tracing_subscriber::prelude::*;
-            use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt, EnvFilter};
 
-            let filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
 
-            tracing_subscriber::registry()
-                .with(
-                    fmt::layer()
-                        .with_writer(f)
-                        .with_ansi(false)
-                        .with_target(false),
-                )
-                .with(filter)
-                .init();
-        }
+    let file_layer = match file {
+        Ok(f) => Some(
+            fmt::layer()
+                .with_writer(f)
+                .with_ansi(false)
+                .with_target(false),
+        ),
         Err(e) => {
             eprintln!("warning: could not open log file {}: {e}", path.display());
-            tracing_subscriber::fmt::init();
+            None
+        }
+    };
+
+    let registry = tracing_subscriber::registry().with(filter);
+    // Apply file layer if available.
+    let registry = registry.with(file_layer);
+
+    // v5.2 O1: OTel bridge layer 接进来（feature 编译时启用）。
+    // 当前的 `observability::otel::init` 仍可独立调（global tracer），
+    // 但有这个 layer 后 tracing::info_span! macro 也会自动桥接。
+    #[cfg(feature = "otel")]
+    {
+        let otel_layer = crate::observability::otel::make_layer();
+        if let Some(layer) = otel_layer {
+            registry.with(layer).init();
+            return;
         }
     }
+    registry.init();
 }
 
 /// Boot-time best-effort log retention. Iterates `~/.weclawbot/logs/`,

@@ -22,6 +22,43 @@
 //! counter / histogram 暴露面。短期 OTel collector 可以同时把 metrics
 //! pull 自 weclawbot `/metrics` 并 fan out 到 OTel-aware backend。
 
+/// v5.2 O1: 构造 tracing-opentelemetry layer，由 daemon::log::setup_file_logging
+/// 组合进 Registry subscriber。返回 None = OTel exporter 构建失败。
+#[cfg(feature = "otel")]
+pub fn make_layer<S>() -> Option<tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{runtime, trace as sdktrace, Resource};
+
+    let endpoint = std::env::var("WECLAWBOT_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+
+    let exporter = match opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(&endpoint)
+        .build()
+    {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("OTel exporter build failed ({e}) — bridge layer disabled");
+            return None;
+        }
+    };
+
+    let resource = Resource::new(vec![KeyValue::new("service.name", "weclawbot")]);
+    let provider = sdktrace::TracerProvider::builder()
+        .with_batch_exporter(exporter, runtime::Tokio)
+        .with_resource(resource)
+        .build();
+    let tracer = provider.tracer("weclawbot");
+    opentelemetry::global::set_tracer_provider(provider);
+    Some(tracing_opentelemetry::layer().with_tracer(tracer))
+}
+
 #[cfg(feature = "otel")]
 pub fn init(service_name: &str) -> Result<(), String> {
     // v5.1 N3: 真 wire — OTel 0.27 API。endpoint 默认 localhost:4317

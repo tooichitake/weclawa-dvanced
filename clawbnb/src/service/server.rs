@@ -116,6 +116,8 @@ fn protected_routes() -> Router {
         .route("/admin/keys", post(super::admin::create_admin_key))
         .route("/admin/keys/{id}", delete(super::admin::revoke_admin_key))
         .route("/admin/backup", post(super::admin::trigger_backup))
+        // v5.2 O5: multi-tenant admin
+        .route("/tenants", get(super::admin::list_tenants))
         // Phase 3: audit log read.
         .route("/audit", get(super::admin::list_audit))
         // Phase 7 follow-up: operator-level UI actions.
@@ -139,6 +141,17 @@ pub async fn run_server(bind: String, port: u16) -> Result<(), String> {
         .route("/api/health", get(routes::get_health))
         .route("/healthz", get(crate::observability::healthz::healthz))
         .route("/metrics", get(metrics_endpoint))
+        // v3.4 G2: Stripe webhook unauthenticated (HMAC verify in-handler).
+        .route(
+            "/api/v1/billing/stripe-webhook",
+            post(super::billing::post_stripe_webhook),
+        )
+        // v5.2 O4: Feishu Event Subscription webhook (challenge + event dispatch).
+        // Unauthenticated — operator-side encrypt key signature verify in handler.
+        .route(
+            "/api/v1/puppet/feishu/webhook/{account_id}",
+            post(super::feishu_webhook::post_feishu_webhook),
+        )
         // Versioned + back-compat aliased API surfaces. Both go through
         // the same protected subtree — old clients keep working while
         // the GUI migrates to /api/v1/*.

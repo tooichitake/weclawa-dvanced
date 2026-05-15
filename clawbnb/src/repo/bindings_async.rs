@@ -40,10 +40,13 @@ impl SqlxBindingRepo {
         agent_id: &str,
     ) -> Result<bool, DbError> {
         let now = Utc::now().to_rfc3339();
+        // v5.2 O2: ANSI ON CONFLICT 兼容 SQLite 3.24+ 和 Postgres，
+        // 取代 SQLite-only "INSERT OR IGNORE"。
         let res = sqlx::query(
-            "INSERT OR IGNORE INTO bindings
+            "INSERT INTO bindings
                  (weixin_user_id, active_account_id, agent_id, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (weixin_user_id) DO NOTHING",
         )
         .bind(user.as_str())
         .bind(active_account_id.as_str())

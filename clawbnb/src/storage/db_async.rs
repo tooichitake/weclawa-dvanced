@@ -34,19 +34,48 @@ use crate::storage::db::DbError;
 
 /// sqlx pool 类型 alias。
 ///
-/// ## v5.2 Postgres backend 路径（设计 sketch）
+/// ## v5.3 Postgres backend — explicit structural plan
 ///
-/// 当前 SqlitePool 直用。Postgres 切换两条路：
-/// - **Option A: sqlx::AnyPool** — 单 binary 双 backend。要把所有
-///   `?1 / ?2` 数字 placeholder 改无序号 `?`，SQL `INSERT OR IGNORE` /
-///   `VACUUM INTO` 等 SQLite-only 子句换 Postgres-portable 写法。
-///   ~3-5 周机械化迁移 + 验证。
-/// - **Option B: cfg-gated 双类型** — `#[cfg(feature="postgres")]
-///   type AsyncDbPool = sqlx::PgPool;` 编译期挑 backend。CI 矩阵跑两份；
-///   SQL 方言差异 cfg 切换。~2-3 周。
+/// 真切 Postgres 必须解决：
 ///
-/// `postgres` Cargo feature 已就位（`sqlx/postgres` driver 编入 binary），
-/// 真切换走 v5.2 PR。当前 SqlitePool 直用。
+/// **1. SQL placeholder 方言**
+/// 当前 repo 用 `?1, ?2`（SQLite 数字 placeholder）。Postgres 用 `$1, $2`，
+/// `sqlx::Any` 只接受无序号 `?`。**~40 query bind 列表**需要改成无序号
+/// + 按位 bind，工作量纯机械化但要细查每条。
+///
+/// **2. SQLite-specific SQL 子句**
+/// - `INSERT OR IGNORE` (出现 3 处：dedup / defaults bootstrap / bindings
+///   register_or_touch) → Postgres 兼容写法 `INSERT ... ON CONFLICT
+///   (col) DO NOTHING`（SQLite 3.24+ 也支持，可统一）
+/// - `VACUUM INTO 'path'` (backup) → Postgres `pg_dump`（语义不同，
+///   按 backend cfg 走两条 path）
+/// - PRAGMA (foreign_keys / journal_mode / busy_timeout / synchronous) →
+///   Postgres 无需，cfg 跳过
+/// - `INTEGER PRIMARY KEY AUTOINCREMENT` (V0001 user_history.id, V0006
+///   user_trust_history.id, V0007 sandbox_logs.id, audit_log.id) →
+///   Postgres `BIGSERIAL` 或 `GENERATED ALWAYS AS IDENTITY`。改 migration
+///   文件 cfg 化或 dup 一份 V*_pg__*.sql
+///
+/// **3. Migration runner**
+/// `_sqlx_migrations` 表 + refinery 兼容 import 都 ANSI SQL，OK。但每个
+/// migration 文件本身的 DDL 需 portable，见上述 (2)。
+///
+/// **4. Pool type**
+/// 两条路：
+/// - cfg-gated typealias：`#[cfg(feature="postgres")] type AsyncDbPool
+///   = sqlx::PgPool;` 编译期 backend 选择
+/// - `sqlx::AnyPool`：runtime backend 检测；单 binary 双驱动
+///
+/// **v5.3 PR 范围**：
+/// - 把 3 处 `INSERT OR IGNORE` 改 `INSERT ... ON CONFLICT DO NOTHING`
+/// - 把 4 处 `AUTOINCREMENT` 改 cfg-gated DDL
+/// - 把 ~40 处 `?1, ?2` 改 `?` 无序号 + 按位 bind
+/// - cfg-gated `AsyncDbPool` typealias
+/// - 加 CI testcontainers postgres 矩阵
+///
+/// **当前 (v5.2)**: 保 SqlitePool。`postgres` Cargo feature 编 sqlx
+/// postgres driver 进 binary（让 v5.3 PR 不用动 Cargo），但 daemon 实际
+/// 跑 SQLite。
 pub type AsyncDbPool = SqlitePool;
 
 /// 打开默认路径的 sqlx pool。**migrations 应已由 rusqlite/refinery
@@ -111,7 +140,8 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
         let now = chrono::Utc::now().to_rfc3339();
         for (name, _sql) in MIGRATION_FILES {
             sqlx::query(
-                "INSERT OR IGNORE INTO _sqlx_migrations (version, applied_at) VALUES (?1, ?2)",
+                "INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?1, ?2)
+                 ON CONFLICT (version) DO NOTHING",
             )
             .bind(*name)
             .bind(&now)

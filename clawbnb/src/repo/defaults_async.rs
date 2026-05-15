@@ -48,9 +48,11 @@ impl SqlxDefaultsRepo {
     pub async fn bootstrap(&self, seed: &Value) -> Result<bool, DbError> {
         let json = serde_json::to_string(seed)?;
         let now = Utc::now().to_rfc3339();
+        // v5.2 O2: ANSI ON CONFLICT (SQLite 3.24+ / Postgres)
         let res = sqlx::query(
-            "INSERT OR IGNORE INTO defaults (id, settings_json, updated_at)
-             VALUES (1, ?1, ?2)",
+            "INSERT INTO defaults (id, settings_json, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(&json)
         .bind(&now)
