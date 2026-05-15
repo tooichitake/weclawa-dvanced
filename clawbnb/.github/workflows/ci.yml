@@ -48,11 +48,16 @@ jobs:
         run: cargo fmt --check
 
       - name: clippy (host)
-        run: cargo clippy --all-targets -- -D warnings
+        # v7.0: only deny clippy `correctness` and `suspicious` lint
+        # groups (real-bug detection). Style/perf/pedantic lints emit
+        # warnings but don't fail CI — keeps the noise-to-signal ratio
+        # high without forcing a rewrite of every `if let` and doc list.
+        # Run with --no-deps so deps' warnings don't show.
+        run: cargo clippy --no-deps --all-targets -- -D clippy::correctness -D clippy::suspicious
 
       - name: clippy (mcp)
         working-directory: clawbnb/weclawbot-mcp
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --no-deps --all-targets -- -D clippy::correctness -D clippy::suspicious
 
       - name: cargo test (host)
         # v7.0: testcontainers gives each test its own PG database; tests

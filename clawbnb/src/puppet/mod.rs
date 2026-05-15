@@ -139,4 +139,3 @@ pub trait MessagingPlatform: Send + Sync {
 
 // v2.2 L2.1: ILinkClient 仍是 prod 唯一 impl。trait impl 加在
 // `api/client.rs` 末尾（紧贴具体实现，便于审计）。这里只 re-export。
-pub use crate::api::client::ILinkClient;

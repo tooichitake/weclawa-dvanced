@@ -62,7 +62,7 @@ impl ClaudeSession {
     /// Spawn `podman run ... <image> claude` for a given user sandbox.
     /// Plugin installs land in that sandbox's writable plugins/ dir.
     pub fn spawn_in_sandbox(sandbox: &Sandbox) -> Result<Self, String> {
-        let mut cmd = crate::sandbox::exec::build_claude_cmd(sandbox, &[]);
+        let cmd = crate::sandbox::exec::build_claude_cmd(sandbox, &[]);
         // build_claude_cmd uses tokio::process::Command; we need the std-cmd
         // shape that portable-pty wants. Recreate from cmdline:
         let program = cmd.as_std().get_program().to_string_lossy().to_string();

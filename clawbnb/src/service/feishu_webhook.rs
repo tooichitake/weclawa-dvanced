@@ -21,7 +21,6 @@ use axum::{
     extract::{Json, Path},
     http::{HeaderMap, StatusCode},
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::puppet::feishu_inbound::{event_to_common, FeishuEvent};

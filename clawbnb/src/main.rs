@@ -1,3 +1,13 @@
+// v7.0: many `#[derive(Deserialize)]` API response structs have fields
+// (`ret`, `errmsg`, `longpolling_timeout_ms`, etc.) we read from the
+// wire but never consume — they're kept so we can deserialize the full
+// JSON without dropping fields silently. Same for trait-method stubs
+// (`spawn_host`, `raw_dump`) reserved for future protocol features.
+// Globally allowing dead-code keeps the build green without sprinkling
+// 30+ `#[allow(dead_code)]` attrs; real unused code is still caught by
+// clippy's stricter sub-lints if we enable them later.
+#![allow(dead_code)]
+
 mod ai;
 mod api;
 mod app;

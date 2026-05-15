@@ -27,7 +27,6 @@
 
 use axum::{
     body::Bytes,
-    extract::Request,
     http::{HeaderMap, StatusCode},
     Json,
 };

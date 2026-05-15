@@ -18,11 +18,16 @@ cargo build --release --bin weclawbot
 cargo test --release --bin weclawbot -- --test-threads=1
 ```
 
-## Postgres backend (v5.6+)
+## Postgres backend (v5.6+) + native types (v7.0+)
 
 Daemon is **Postgres-only** from v5.6 onwards. SQLite was dropped to
-eliminate dual-backend bugs (refinery compat regression, `?` vs `$N`
-placeholder gap, `INTEGER` width mismatch, etc).
+eliminate dual-backend bugs.
+
+v7.0 upgraded all column types to PG-native: JSONB (settings/audit/trust
+payloads), UUID (admin_keys.id, audit_log.actor_key_id), TIMESTAMPTZ
+(all 22 timestamp columns). Domain types still expose `String` at the
+API boundary for backward compat — translation happens in repo via
+`crate::storage::ts::*`.
 
 ### Local dev setup (one-time)
 
@@ -87,9 +92,51 @@ Test these combinations before commit:
 ships with sqlite enabled for the `import-sqlite` one-shot migration,
 but no runtime code uses it.
 
-Tests use `--test-threads=1` because they share one PG container across
-test cases that don't conflict on rows. Real per-test isolation needs
-the `testcontainers` crate (planned).
+Tests use `testcontainers` (v7.0+) — each test gets its own randomly-
+named Postgres database inside a shared `postgres:16` container that
+lives for the test process. Tests parallelize by default (no
+`--test-threads=1` needed). The container is auto-stopped at process
+exit.
+
+**WSL setup (one-time)**: `testcontainers` needs a Docker-compatible
+socket. WSL provides podman's native socket which speaks the Docker
+API:
+
+```bash
+# Enable podman API socket as a systemd user service (persistent).
+systemctl --user enable --now podman.socket
+
+# Ensure log driver is k8s-file (not journald) so testcontainers'
+# `follow logs` wait-for-ready strategy works. Default journald
+# + file events-backend combo doesn't support log streaming.
+cat > ~/.config/containers/containers.conf << 'EOF'
+[containers]
+log_driver = "k8s-file"
+
+[engine]
+cgroup_manager = "cgroupfs"
+events_logger = "file"
+
+[engine.runtimes]
+runsc = ["/usr/local/bin/runsc-wsl"]
+
+[network]
+default_rootless_network_cmd = "pasta"
+EOF
+systemctl --user restart podman.socket
+
+# Point testcontainers at the socket. Put in ~/.profile so it
+# persists across WSL sessions:
+echo 'export DOCKER_HOST=unix:///run/user/1000/podman/podman.sock' >> ~/.profile
+
+# Verify (in a new shell):
+echo $DOCKER_HOST
+podman info --format json | grep logDriver  # should report "k8s-file"
+cargo test --release  # should run all tests in parallel, ~35s
+```
+
+CI Ubuntu runners have Docker pre-installed so they don't need this
+workaround — testcontainers picks up `/var/run/docker.sock` directly.
 
 ## CI
 

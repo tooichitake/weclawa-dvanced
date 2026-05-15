@@ -139,7 +139,6 @@ mod tests {
     use axum::body::to_bytes;
     use axum::routing::get;
     use axum::Router;
-    use http_body_util::BodyExt as _;
     use tower::ServiceExt;
 
     use crate::storage::db_async as db;

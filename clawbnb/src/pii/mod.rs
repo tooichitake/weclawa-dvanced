@@ -62,5 +62,11 @@ mod detector;
 mod integration_tests;
 pub mod policy;
 
+// Public re-exports — some used internally, others are API surface
+// for downstream `crate::config::ComplianceConfig::pii_*_overrides` and
+// future callers. `#[allow(unused_imports)]` is appropriate at the
+// module-level facade.
+#[allow(unused_imports)]
 pub use detector::{detect_classes, scrub_with_policy, PiiClass, PiiHit, PiiScrubResult};
+#[allow(unused_imports)]
 pub use policy::{PiiPolicy, PolicyMap};

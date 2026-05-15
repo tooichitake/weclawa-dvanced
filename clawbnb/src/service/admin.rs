@@ -20,7 +20,6 @@ use serde_json::{json, Value};
 
 use crate::auth::admin_key::{mint_new_key_async, AdminContext};
 use crate::repo::admin_keys::Role;
-use crate::repo::admin_keys_async::SqlxAdminKeyRepo;
 use crate::repo::audit::AuditInput;
 use crate::repo::audit_async::SqlxAuditRepo;
 use crate::storage::db_async;

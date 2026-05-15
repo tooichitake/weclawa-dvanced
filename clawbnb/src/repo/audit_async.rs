@@ -69,9 +69,9 @@ impl SqlxAuditRepo {
         .map_err(|e| DbError::Pool(format!("sqlx audit list: {e}")))?;
         Ok(rows
             .into_iter()
-            .map(|(id, ts, actor, action, target, before_v, after_v, ip)| AuditEntry {
+            .map(|(id, ts_val, actor, action, target, before_v, after_v, ip)| AuditEntry {
                 id,
-                ts: crate::storage::ts::format_rfc3339(&ts),
+                ts: ts::format_rfc3339(&ts_val),
                 actor_key_id: actor.map(|u| u.to_string()),
                 action,
                 target,
@@ -95,10 +95,6 @@ impl SqlxAuditRepo {
         Ok(row.0.max(0) as u64)
     }
 }
-
-// suppress unused import warning when ts helper isn't used here directly
-#[allow(unused_imports)]
-use ts as _ts;
 
 #[cfg(test)]
 mod tests {

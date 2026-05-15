@@ -325,7 +325,9 @@ async fn download_url_to_temp(url: &str, temp_dir: &Path) -> Result<std::path::P
 // resolve_and_check_public / is_public_ip 已经搬到 `crate::storage::url_guard`，
 // 让 webhook.rs (v2.1.A4) 共用同一份 SSRF 防护。下面是兼容 alias，
 // 避免修改全部 callsite。
-use crate::storage::url_guard::{is_public_ip, resolve_and_check_public};
+use crate::storage::url_guard::resolve_and_check_public;
+#[cfg(test)]
+use crate::storage::url_guard::is_public_ip;
 
 fn pick_url_filename(url: &str, headers: &reqwest::header::HeaderMap) -> String {
     // Try Content-Disposition first, fall back to last URL segment.

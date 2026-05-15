@@ -16,10 +16,10 @@
 
 // Re-export public types so external `crate::ai::cli_provider::*` imports
 // continue to compile.
-pub use crate::ai::{AttachedUrl, ClaudeOutput, CliConfig, FileSource, GeneratedFile};
+pub use crate::ai::{AttachedUrl, ClaudeOutput, CliConfig, GeneratedFile};
 // Re-export typing primitives — handler.rs still references them via the
 // `cli_provider` path; new code should import from `crate::monitor::typing`.
-pub use crate::monitor::typing::{start as start_typing_pulse, TypingContext, TypingHandle};
+pub use crate::monitor::typing::{start as start_typing_pulse, TypingContext};
 
 use crate::ai::claude::prompt::{build_prompt, build_system_only, build_user_only, format_user_segment};
 use crate::ai::history::{append, recent};

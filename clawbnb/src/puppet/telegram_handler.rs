@@ -34,7 +34,7 @@ use tracing::{info, warn};
 
 use crate::error::WeclawError;
 use crate::ids::WeixinUserId;
-use crate::monitor::common::{self, CommonInbound};
+use crate::monitor::common::{self};
 use crate::puppet::telegram::TelegramBot;
 use crate::puppet::telegram_inbound::{update_to_common, Update};
 use crate::puppet::{MessagingPlatform, OutboundMessage};
@@ -269,7 +269,7 @@ async fn download_telegram_attachments(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::puppet::telegram_inbound::{Chat, Message, Update, User};
+    use crate::puppet::telegram_inbound::Update;
 
     /// 验证 update 不带 message 时 handler 不 panic / 不调下游。
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
