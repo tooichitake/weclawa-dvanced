@@ -10,7 +10,7 @@
 //! - **遗留 CLI / startup**：仍走 sync 版（CLI 是单线程不在乎阻塞）
 //! - **handler.rs hot path**：切 async（每条 inbound 都走 is_active）
 
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::storage::db::DbError;
 use crate::tenancy::{TenantId, TenantStatus};
@@ -36,11 +36,11 @@ impl AsyncTenant {
 }
 
 pub struct SqlxTenantRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxTenantRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

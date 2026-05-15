@@ -2,16 +2,16 @@
 
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::storage::db::DbError;
 
 pub struct SqlxDefaultsRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxDefaultsRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

@@ -1,18 +1,18 @@
 //! AsyncBindingRepo — v4.1 K5 sqlx 版本。
 
 use chrono::Utc;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::ids::{AccountId, WeixinUserId};
 use crate::repo::bindings::Binding;
 use crate::storage::db::DbError;
 
 pub struct SqlxBindingRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxBindingRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 
@@ -131,7 +131,7 @@ mod tests {
         SqlxBindingRepo::new(db_async::open_in_memory().await.unwrap())
     }
 
-    async fn seed_account(pool: &SqlitePool, id: &str) {
+    async fn seed_account(pool: &AsyncDbPool, id: &str) {
         sqlx::query(
             "INSERT INTO accounts (account_id, base_url, saved_at)
              VALUES (?, ?, ?)",

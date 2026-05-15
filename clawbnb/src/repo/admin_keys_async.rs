@@ -12,17 +12,17 @@
 //! 这跟 IO async 不冲突 —— async IO 解决"reactor 等 IO"问题，CPU 重活
 //! 仍然得分到 blocking 线程。
 
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::repo::admin_keys::{AdminKeyRecord, Role};
 use crate::storage::db::DbError;
 
 pub struct SqlxAdminKeyRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxAdminKeyRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

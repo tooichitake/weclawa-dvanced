@@ -24,38 +24,49 @@
 //! - synchronous = NORMAL
 //! - busy_timeout = 5000ms
 
-use std::path::Path;
 use std::sync::OnceLock;
 
+#[cfg(not(feature = "postgres"))]
+use std::path::Path;
+
+#[cfg(not(feature = "postgres"))]
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+#[cfg(not(feature = "postgres"))]
 use sqlx::SqlitePool;
+
+#[cfg(feature = "postgres")]
+use sqlx::postgres::PgPoolOptions;
 
 use crate::storage::db::DbError;
 
-/// sqlx pool 类型 alias。
+/// sqlx pool 类型 alias — cfg-gated SQLite/Postgres 双 backend。
 ///
-/// ## v5.3 Postgres backend — current state
+/// ## v5.3 final state — Postgres ready
 ///
-/// **已完成 (v5.3)**:
-/// - ✅ 所有 repo 用无序号 `?` placeholder（76 处 `?N` 已 mechanic 转）
+/// **全部完成**:
+/// - ✅ 所有 repo 用无序号 `?` placeholder（76 处 `?N` → `?`）
 /// - ✅ 所有 INSERT 用 ANSI `ON CONFLICT (col) DO ...`（替代 SQLite-only
 ///   `INSERT OR IGNORE`）
 /// - ✅ Migration runner `portable_ddl()` 把 `INTEGER PRIMARY KEY
-///   AUTOINCREMENT` cfg 替换成 `BIGSERIAL PRIMARY KEY`（PG 友好）
-/// - ✅ CI postgres testcontainer 矩阵（`.github/workflows/postgres.yml`）
-///
-/// **仍待 (PG 真启用最后一步)**:
-/// - 把所有 repo 的 `pool: SqlitePool` 字段改成 `pool: AsyncDbPool`，加
-///   cfg-gated typealias：`#[cfg(feature="postgres")] type AsyncDbPool =
-///   sqlx::PgPool;` —— 纯机械改动，约 11 文件 × 2 处。CI workflow 触发
-///   时自然暴露剩余 type 不兼容点。
-/// - `cli/backup.rs::VACUUM INTO` cfg-gate 到 `pg_dump` 外部命令（已加
-///   cfg 分支占位）
-/// - `audit_async.rs::last_insert_rowid()` 改 `RETURNING id`（1 处）
+///   AUTOINCREMENT` cfg 替换成 `BIGSERIAL PRIMARY KEY`
+/// - ✅ CI postgres testcontainer 矩阵
+/// - ✅ **`AsyncDbPool` cfg-gated typealias** (`SqlitePool` / `PgPool`)
+/// - ✅ **所有 11 repo `pool: SqlitePool` → `pool: AsyncDbPool`**
+/// - ✅ `cli/backup.rs::VACUUM INTO` → `pg_dump` 外部命令 cfg 分支
+/// - ✅ `audit_async::record::last_insert_rowid()` → `RETURNING id`
 ///
 /// **不变 (SQLite 友好)**:
 /// - `?` placeholder 跨 driver 通用（sqlx 0.8 PG 客户端自动改写到 `$N`）
 /// - ANSI ON CONFLICT 两 backend 都吃
+/// - `RETURNING id` 两 backend 都吃 (SQLite 3.35+, PG 9.1+)
+///
+/// ## Backend 切换方法
+///
+/// **默认 SQLite**：`cargo build --release` —— `~/.weclawbot/state.db` 文件
+///
+/// **Postgres**：`cargo build --release --features postgres`，daemon 启动
+/// 时读 env `WECLAWBOT_PG_URL=postgres://user:pass@host/db`（或
+/// `DATABASE_URL` 兜底）。Backup/restore 走 `pg_dump`/`psql` 外部命令。
 ///
 /// **2. SQLite-specific SQL 子句**
 /// - `INSERT OR IGNORE` (出现 3 处：dedup / defaults bootstrap / bindings
@@ -90,10 +101,15 @@ use crate::storage::db::DbError;
 /// **当前 (v5.2)**: 保 SqlitePool。`postgres` Cargo feature 编 sqlx
 /// postgres driver 进 binary（让 v5.3 PR 不用动 Cargo），但 daemon 实际
 /// 跑 SQLite。
+#[cfg(not(feature = "postgres"))]
 pub type AsyncDbPool = SqlitePool;
 
-/// 打开默认路径的 sqlx pool。**migrations 应已由 rusqlite/refinery
-/// 在 daemon boot 时跑过**，本函数不重跑 migration（避免双 runner race）。
+#[cfg(feature = "postgres")]
+pub type AsyncDbPool = sqlx::PgPool;
+
+/// 打开默认 backend：SQLite 走 `~/.weclawbot/state.db` 文件；Postgres
+/// 走 env `WECLAWBOT_PG_URL`（postgres://user:pass@host/db）。
+#[cfg(not(feature = "postgres"))]
 pub async fn open_default() -> Result<AsyncDbPool, DbError> {
     let path = crate::storage::db::default_path();
     if let Some(parent) = path.parent() {
@@ -102,8 +118,27 @@ pub async fn open_default() -> Result<AsyncDbPool, DbError> {
     open_at(&path).await
 }
 
+#[cfg(feature = "postgres")]
+pub async fn open_default() -> Result<AsyncDbPool, DbError> {
+    let url = std::env::var("WECLAWBOT_PG_URL").or_else(|_| std::env::var("DATABASE_URL"))
+        .map_err(|_| DbError::Pool(
+            "neither WECLAWBOT_PG_URL nor DATABASE_URL set (postgres backend requires one)".into(),
+        ))?;
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&url)
+        .await
+        .map_err(|e| DbError::Pool(e.to_string()))?;
+    apply_migrations(&pool).await?;
+    Ok(pool)
+}
+
 /// Open at a specific path. Used by tests + bespoke deployments.
 /// v4.2: 也跑 migrations — 不再依赖 rusqlite/refinery 跑 schema。
+///
+/// **SQLite-only** —— Postgres 没"file path" 概念，PG 部署用 `open_default()`
+/// 走 env DSN，或 caller 直接 `PgPoolOptions::connect()` 自己来。
+#[cfg(not(feature = "postgres"))]
 pub async fn open_at(path: &Path) -> Result<AsyncDbPool, DbError> {
     let opts = SqliteConnectOptions::new()
         .filename(path)
@@ -129,7 +164,7 @@ pub async fn open_at(path: &Path) -> Result<AsyncDbPool, DbError> {
 /// v2-v4.1 用 refinery 跑 migration，留下 `refinery_schema_history` 表 +
 /// 全部 schema。v4.2 切到本 runner，检测到 refinery 历史时**导入**它的
 /// migration 记录到 `_sqlx_migrations`，不重跑 DDL。
-pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
+pub async fn apply_migrations(pool: &AsyncDbPool) -> Result<(), DbError> {
     use sqlx::Executor;
     pool.execute(
         "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
@@ -141,8 +176,20 @@ pub async fn apply_migrations(pool: &SqlitePool) -> Result<(), DbError> {
     .map_err(|e| DbError::Migration(format!("create _sqlx_migrations: {e}")))?;
 
     // refinery 兼容：检测它的 schema history 表
+    // SQLite 用 sqlite_master，Postgres 用 information_schema.tables —
+    // 两条 SQL 都查"有没有 refinery_schema_history"，结果转 Option<String>。
+    #[cfg(not(feature = "postgres"))]
     let refinery_exists: Option<(String,)> = sqlx::query_as(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='refinery_schema_history'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| DbError::Migration(format!("check refinery: {e}")))?;
+
+    #[cfg(feature = "postgres")]
+    let refinery_exists: Option<(String,)> = sqlx::query_as(
+        "SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'refinery_schema_history'",
     )
     .fetch_optional(pool)
     .await
@@ -261,7 +308,12 @@ const MIGRATION_FILES: &[(&str, &str)] = &[
 /// In-memory pool for tests. **`max_connections=1`** because SQLite
 /// `:memory:` 是 per-connection namespace —— 多 connection 看到不同的
 /// fresh memory db，跟 rusqlite path 同款限制。
-#[cfg(test)]
+///
+/// **Postgres**：没在线 in-memory 等价物；PG 测试需要 testcontainer
+/// 起 docker postgres，跑 env `DATABASE_URL` 注入 → `open_default()`。
+/// 本函数在 `feature = "postgres"` 下会试 connect env DSN（CI workflow
+/// 跑 postgres:16 service container 时可用）。
+#[cfg(all(test, not(feature = "postgres")))]
 pub async fn open_in_memory() -> Result<AsyncDbPool, DbError> {
     let opts = SqliteConnectOptions::new()
         .in_memory(true)
@@ -272,6 +324,27 @@ pub async fn open_in_memory() -> Result<AsyncDbPool, DbError> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(opts)
+        .await
+        .map_err(|e| DbError::Pool(e.to_string()))?;
+    apply_migrations(&pool).await?;
+    Ok(pool)
+}
+
+/// Postgres `open_in_memory` 等价 —— 连 env DSN 跑 fresh schema。CI
+/// workflow per-test 用 `DATABASE_URL` 注入 ephemeral PG。
+///
+/// **重要**：所有 PG 测试共享一个数据库，per-test data 不隔离。tests
+/// 之间要避免数据交叉污染（用 unique key prefix 或测试前 TRUNCATE）。
+/// 真严格隔离需要 testcontainers crate / docker-test，留 follow-up。
+#[cfg(all(test, feature = "postgres"))]
+pub async fn open_in_memory() -> Result<AsyncDbPool, DbError> {
+    let url = std::env::var("DATABASE_URL").or_else(|_| std::env::var("WECLAWBOT_PG_URL"))
+        .map_err(|_| DbError::Pool(
+            "DATABASE_URL not set; CI postgres workflow must inject it".into(),
+        ))?;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
         .await
         .map_err(|e| DbError::Pool(e.to_string()))?;
     apply_migrations(&pool).await?;

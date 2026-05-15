@@ -4,18 +4,18 @@
 //! token_nonce；读时优先解 ciphertext，跌回 plaintext。
 
 use chrono::Utc;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::ids::{AccountId, BaseUrl, BotToken, WeixinUserId};
 use crate::repo::accounts::Account;
 use crate::storage::db::DbError;
 
 pub struct SqlxAccountRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxAccountRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

@@ -2,17 +2,17 @@
 
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::repo::audit::{AuditEntry, AuditInput};
 use crate::storage::db::DbError;
 
 pub struct SqlxAuditRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxAuditRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 
@@ -20,10 +20,14 @@ impl SqlxAuditRepo {
         let ts = Utc::now().to_rfc3339();
         let before = input.before.map(serde_json::to_string).transpose()?;
         let after = input.after.map(serde_json::to_string).transpose()?;
-        let res = sqlx::query(
+        // v5.3: 用 `RETURNING id` 替代 SQLite-only `last_insert_rowid()` ──
+        // RETURNING 在 SQLite 3.35+ (2021-03-12) 和 Postgres 9.1+ 都支持，
+        // 是跨 backend portable 的拿 generated id 方法。
+        let row: (i64,) = sqlx::query_as(
             "INSERT INTO audit_log
                  (ts, actor_key_id, action, target, before_json, after_json, ip)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             RETURNING id",
         )
         .bind(&ts)
         .bind(input.actor_key_id)
@@ -32,10 +36,10 @@ impl SqlxAuditRepo {
         .bind(&before)
         .bind(&after)
         .bind(input.ip)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| DbError::Pool(format!("sqlx audit record: {e}")))?;
-        Ok(res.last_insert_rowid())
+        Ok(row.0)
     }
 
     pub async fn list_recent_for_tenant(

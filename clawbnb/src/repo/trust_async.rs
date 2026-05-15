@@ -2,18 +2,18 @@
 
 use chrono::Utc;
 use serde_json::json;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::repo::trust::TrustSnapshot;
 use crate::storage::db::DbError;
 use crate::tenancy::trust::{TrustInputs, TrustTier};
 
 pub struct SqlxTrustRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxTrustRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

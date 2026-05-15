@@ -3,18 +3,18 @@
 
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::ids::UserHash;
 use crate::repo::users::{ConsoleSession, HistoryTurn, UserProfile};
 use crate::storage::db::DbError;
 
 pub struct SqlxUserRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxUserRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

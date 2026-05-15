@@ -64,7 +64,7 @@ pub struct MintedKey {
 /// Async mint — `Sqlx*Repo` 版本。argon2 hash 是 CPU bound，包在
 /// `spawn_blocking` 里。
 pub async fn mint_new_key_async(
-    pool: sqlx::SqlitePool,
+    pool: crate::storage::db_async::AsyncDbPool,
     name: &str,
     role: Role,
 ) -> Result<MintedKey, String> {
@@ -193,7 +193,7 @@ fn verify_key(plaintext: &str, stored_hash: &str) -> Result<bool, String> {
 /// with mode 0600 so the operator can recover it from disk if they miss
 /// the stdout banner.
 pub async fn ensure_bootstrap_super_admin(
-    pool: sqlx::SqlitePool,
+    pool: crate::storage::db_async::AsyncDbPool,
 ) -> Result<Option<String>, String> {
     let repo = SqlxAdminKeyRepo::new(pool.clone());
     let n = repo
@@ -245,7 +245,7 @@ mod tests {
     use super::*;
     use crate::storage::db_async;
 
-    async fn install_pool() -> sqlx::SqlitePool {
+    async fn install_pool() -> crate::storage::db_async::AsyncDbPool {
         let pool = db_async::open_in_memory().await.unwrap();
         db_async::set_global_async_pool(pool.clone());
         pool

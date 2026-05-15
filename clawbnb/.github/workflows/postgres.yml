@@ -1,16 +1,18 @@
 name: Postgres backend (v5.3)
 
-# v5.3: 跑 `cargo test --features postgres`，把 sqlx 后端切到 PG 驱动。
-# 即便所有 repo 当前仍 hard-code `pool: SqlitePool`（PG 真启用最后一步留
-# 在 mechanic PR），本 workflow 验证：
+# v5.3 final: 跑 `cargo test --features postgres` 真启用 PG 后端。
 #
-#   1. `--features postgres` 编译通过（sqlx PG driver 加入 deps tree）
-#   2. `portable_ddl()` SQL 重写在 PG dialect 下 syntactically valid
-#   3. `pg_dump` / `psql` 在 backup/restore 路径中 cfg 分支不破坏 default build
+#   1. `AsyncDbPool` cfg-gated typealias 切到 `sqlx::PgPool`
+#   2. 所有 11 repo 用 `AsyncDbPool` 字段类型 (mechanic swap 完成)
+#   3. Migration runner `portable_ddl()` SQL 重写：`INTEGER PRIMARY KEY
+#      AUTOINCREMENT` → `BIGSERIAL PRIMARY KEY`
+#   4. `?` placeholder + `ON CONFLICT` + `RETURNING id` 跨 driver portable
+#   5. Backup/restore 走 `pg_dump`/`psql` 外部命令
 #
-# Postgres testcontainer 在 services: 下起，env DATABASE_URL 注入。
-# 真正切 PG 后端的 integration test 留 follow-up PR 写 —— 当前只确保
-# 编译矩阵不退化。
+# Postgres testcontainer 在 services: 下起，env DATABASE_URL 注入；
+# `open_in_memory()` 的 PG-feature 变体直接连 `DATABASE_URL` 跑 fresh
+# schema (per-process 共享 DB；test isolation 通过 sqlx pool 限制 +
+# 顺序运行)。
 
 on:
   push:
@@ -71,10 +73,12 @@ jobs:
         run: cargo build --release --features postgres
 
       - name: cargo test --features postgres
-        # 当前所有 _async repo 仍 hard-code `pool: SqlitePool` —— 这一步会
-        # 跑 SQLite-only 测试。一旦后续 PR 把 `pool: SqlitePool` 切成
-        # `pool: AsyncDbPool` (cfg-gated)，本 step 自动 exercise PG 驱动。
-        run: cargo test --release --features postgres
+        # v5.3 final: 所有 repo 已切 `AsyncDbPool`，本 step 真跑 PG 后端
+        # 测试 (open_in_memory() 在 postgres feature 下连 DATABASE_URL)。
+        # --test-threads=1 因为 PG 共享一份 schema，per-test 数据 race 隔离
+        # 通过顺序运行 (不是真 isolation；follow-up 用 testcontainers crate
+        # 给每个测试一份独立 DB)。
+        run: cargo test --release --features postgres -- --test-threads=1
 
       - name: cargo build all feature combinations
         # 健康检查：所有 feature 组合编译。失败会捕获 cfg-gating

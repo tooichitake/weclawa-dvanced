@@ -36,7 +36,7 @@ use crate::error::WeclawError;
 use crate::tenancy::TenantId;
 
 /// sqlx pool alias —  audit_archiver only — bridge to global async pool.
-type AsyncPool = sqlx::SqlitePool;
+type AsyncPool = crate::storage::db_async::AsyncDbPool;
 
 pub struct SqliteAuditArchiver {
     pool: AsyncPool,

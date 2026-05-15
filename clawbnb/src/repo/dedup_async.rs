@@ -3,16 +3,16 @@
 //! handler.rs 每条 inbound 都打一次 dedup check 跟 mark_seen，是真热
 //! 路径。切到 async 后省去 spawn_blocking 跳板。
 
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::storage::db::DbError;
 
 pub struct SqlxDedupRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxDedupRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

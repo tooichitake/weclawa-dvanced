@@ -1,16 +1,16 @@
 //! AsyncRateLimitRepo — v4.1 K3 sqlx 版本。
 
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::repo::rate_limits::WindowCount;
 use crate::storage::db::DbError;
 
 pub struct SqlxRateLimitRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxRateLimitRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 

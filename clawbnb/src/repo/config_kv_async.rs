@@ -5,16 +5,16 @@
 
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::SqlitePool;
+use crate::storage::db_async::AsyncDbPool;
 
 use crate::storage::db::DbError;
 
 pub struct SqlxConfigKvRepo {
-    pool: SqlitePool,
+    pool: AsyncDbPool,
 }
 
 impl SqlxConfigKvRepo {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: AsyncDbPool) -> Self {
         Self { pool }
     }
 
