@@ -43,7 +43,57 @@ pub async fn complete_with_content(
     content: &InboundContent,
 ) -> Result<ClaudeOutput, String> {
     let user_hash = sandbox.user_hash.as_str();
-    let user_segment = format_user_segment(content);
+
+    // v7.3 — PII scrub on outbound AI prompt. Plan M2 calls for
+    // "AI prompt with PII optionally scrubbed before being sent to
+    // Claude (HIPAA/SOC2/GDPR mode)". The policy comes from the
+    // Mode-driven `ai_prompt_baseline` plus any per-class overrides
+    // from operator config. In Permissive (default OSS) mode, every
+    // class is Pass and this is a no-op O(N) walk; in Strict mode
+    // every class is Block/Redact.
+    //
+    // If any Block-policy class hits → refuse to call the AI and return
+    // a user-facing error string. We deliberately surface this to the
+    // WeChat user ("您的消息含有不可发送的敏感内容") instead of
+    // silently scrubbing — Block means the operator's compliance policy
+    // forbids that data leaving the daemon.
+    //
+    // We scrub `content.text` AND use the scrubbed version for both
+    // (a) the prompt sent to Claude and (b) the history we persist.
+    // Storing the unscrubbed original would defeat the point in Strict
+    // mode (operator could later read history and see PII).
+    let pii_policy = crate::config::Config::cached()
+        .compliance
+        .ai_prompt_policy();
+    let scrub = crate::pii::scrub_with_policy(&content.text, &pii_policy);
+    if scrub.blocked {
+        let classes: Vec<&'static str> = scrub
+            .hits
+            .iter()
+            .filter(|h| matches!(
+                pii_policy.policy_for(h.class),
+                crate::pii::PiiPolicy::Block
+            ))
+            .map(|h| h.class.as_str())
+            .collect();
+        tracing::warn!(
+            "ai_prompt blocked for {user_hash} by policy ({} classes): {:?}",
+            classes.len(),
+            classes
+        );
+        metrics::counter!(
+            "weclawbot_ai_prompt_blocked_total",
+            "reason" => "pii_block_policy"
+        )
+        .increment(1);
+        return Err("(消息中含敏感信息，已被合规策略拒绝处理)".to_string());
+    }
+    let scrubbed_content = InboundContent {
+        text: scrub.scrubbed.clone(),
+        ..(*content).clone()
+    };
+
+    let user_segment = format_user_segment(&scrubbed_content);
     // v2.1.B3: 不在 invoke 之前 append user turn。如果 invoke 失败而 user
     // turn 已入 DB，下次拼 prompt 会看到一个孤儿 user 消息（没有对应
     // assistant 回复），上下文对不齐，模型会接到错误时机的位置。改为：

@@ -1,13 +1,28 @@
-//! SLA monitoring — v3 enterprise feature.
+//! SLA monitoring — types-only (v7.3 status: aggregator not yet wired).
 //!
 //! ## 用途
 //!
 //! Hosted SaaS 客户合同里通常有 SLA：例如"99.5% 可用性 / p99 inbound→reply
 //! < 30s"。这块从 Prometheus metrics + audit_log 滚动窗口聚合算
-//! tenant-scoped 数字，写到 `sla_rollup` 表（v3.1 schema），供
+//! tenant-scoped 数字，写到 `sla_rollup` 表（schema 待加），供
 //! - GUI SLA dashboard 卡片
-//! - Stripe credit 计算（v3 M3）
+//! - Stripe credit 计算
 //! - 客户合规报表导出
+//!
+//! ## 实现状态 (v7.3)
+//!
+//! - **types** ([`SlaWindow`], [`SlaTarget`]) — stable, importable now
+//! - **aggregator** — not yet wired. Two pieces still needed:
+//!     1. migration `V0014__sla_rollup.sql` with columns matching
+//!        `SlaWindow` (tenant_id / window_start / covered_seconds /
+//!        downtime_seconds / latency_p99_ms / error_rate)
+//!     2. scheduler task (similar shape to
+//!        [`crate::ee::audit_scheduler`]) that runs every 5min, queries
+//!        Prometheus via its HTTP API (`/api/v1/query_range`), computes
+//!        per-tenant rollups, INSERTs into `sla_rollup`
+//!
+//! Both are mechanical follow-up work; the types here are the stable
+//! contract the aggregator + GUI cards will share.
 //!
 //! ## 计算口径
 //!
@@ -16,10 +31,6 @@
 //! - **latency_p99** = 滚动 5-min histogram quantile
 //! - **error_rate** = `weclawbot_ai_invocations_total{status="error"}` /
 //!   total，连续 1 小时窗口
-//!
-//! ## v3 占位
-//!
-//! 当前只定义类型 + trait；真聚合逻辑 v3.1 PR 实施。
 
 use serde::{Deserialize, Serialize};
 

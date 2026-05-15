@@ -197,6 +197,27 @@ fn build_sandbox_cmd(
         .arg("--memory").arg(DEFAULT_MEMORY)
         .arg("--cpus").arg(DEFAULT_CPUS)
         .arg("--pids-limit").arg(DEFAULT_PIDS_LIMIT)
+        // v7.3 — defense-in-depth capability drop. Plan M2 "tool allowlist"
+        // calls for "podman --cap-drop + claude --disallowedTools 双重落地".
+        // The claude CLI level controls *what tools the AI can use*, the
+        // podman level controls *what syscalls the container can attempt at
+        // all*. Dropping ALL caps and adding back none means the sandbox
+        // can't (e.g.) CAP_NET_RAW (no ICMP/raw sockets), CAP_NET_BIND_SERVICE
+        // (no privileged ports), CAP_CHOWN (no chmod tricks), CAP_DAC_OVERRIDE
+        // (no DAC bypass). claude needs none of these for normal operation
+        // — it talks TCP egress to api.anthropic.com on 443 (no special caps
+        // needed for outbound connect), reads/writes its mounted $HOME and
+        // /work (user-owned, no DAC override needed). gVisor (runsc) already
+        // filters syscalls aggressively; cap-drop is the second wall.
+        //
+        // If we ever need a cap back (e.g. for ping diagnostics), add
+        // `--cap-add=NET_RAW` here. Do NOT remove the --cap-drop=ALL.
+        .arg("--cap-drop=ALL")
+        // Belt-and-suspenders: even with caps dropped, the container could
+        // try `setuid` binaries inside its rootfs (unlikely to escalate
+        // since we drop caps, but eliminates a whole class). no-new-privs
+        // is OCI-spec, accepted by both runsc and crun.
+        .arg("--security-opt=no-new-privileges")
         .arg("--read-only")
         .arg("--tmpfs").arg("/tmp")
         .arg("--tmpfs").arg("/run")

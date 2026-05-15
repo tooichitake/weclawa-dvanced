@@ -1,4 +1,4 @@
-//! Enterprise Edition (`ee/`) — v3 商业级特性子树。
+//! Enterprise Edition (`ee/`) — 商业级特性子树。
 //!
 //! ## 设计动机
 //!
@@ -11,16 +11,19 @@
 //! - Hosted SaaS / 企业自部署 → `cargo build --features ee` 启用商业模块
 //! - 商业模块 license 独立（v3 PR 时增 LICENSE-ee.md）
 //!
-//! ## 当前内容
+//! ## 实现状态 (v7.3)
 //!
-//! v3 一次 ship 只搭骨架 + 占位模块：
+//! | 模块 | 状态 | 入口 |
+//! |---|---|---|
+//! | `oidc` + `oidc_callback` + `jwks` | **生产就绪** | `crate::service::sso::oidc_callback` |
+//! | `saml` + `saml_dsig` | **生产就绪** (严格-profile XML-DSig verify) | `crate::service::sso::saml_acs` |
+//! | `audit_archiver` + `audit_scheduler` | **生产就绪** (24h 周期 task) | `cli/start::run` |
+//! | `audit_retention` | trait shape | 被 `audit_archiver` 实现 |
+//! | `sla` | **类型层就位**，aggregator 未 wire | 待 plan M3 |
 //!
-//! - `sso` — SAML/OIDC 集成（v3.1 实施）
-//! - `sla` — SLA 指标聚合（v3.1）
-//! - `audit_retention` — 长期审计日志归档（v3.1 HIPAA mode 用）
-//!
-//! 每个子模块当前只导出 trait + stub impl，让 callsite 编译过 `cfg(feature
-//! = "ee")` 即可；真实业务在 v3 增量 PR 补全。
+//! v3 alpha 阶段（v5.x）确实是"占位模块"，v7.x 把 SSO + audit retention
+//! 一路打通；SLA aggregator 是仍待补的最后一块（依赖 Prometheus rollup
+//! pipeline，是独立的运维事项）。
 
 #![cfg(feature = "ee")]
 
@@ -28,9 +31,14 @@ pub mod audit_archiver;
 pub mod audit_retention;
 pub mod audit_scheduler;
 pub mod jwks;
-pub mod saml_dsig;
 pub mod oidc;
 pub mod oidc_callback;
 pub mod saml;
+pub mod saml_dsig;
 pub mod sla;
-pub mod sso;
+// v7.3 housekeeping: `ee/sso.rs` (the dead `IdentityProvider` trait)
+// removed. v7.2 wired SSO via free functions in `service/sso.rs` +
+// `auth/sso_session.rs` + `auth/sso_provision.rs` — cleaner than the
+// trait dispatch because OIDC and SAML callbacks have meaningfully
+// different shape (GET vs POST, query vs form). If a third SSO
+// protocol (e.g. WS-Federation) shows up we'll revisit the abstraction.

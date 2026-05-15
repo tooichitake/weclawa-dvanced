@@ -36,7 +36,7 @@ pub struct Attachment {
     pub kind: &'static str,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct InboundContent {
     pub text: String,
     pub attachments: Vec<Attachment>,

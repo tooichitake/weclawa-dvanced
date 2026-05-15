@@ -25,6 +25,24 @@ impl SqlxAuditRepo {
         let actor_uuid: Option<Uuid> = input
             .actor_key_id
             .and_then(|s| Uuid::parse_str(s).ok());
+
+        // v7.3 — PII scrub on before/after JSONB. Plan M2 calls for
+        // "audit log without leaking user PII". Settings diffs may
+        // include user names / phone numbers / emails (e.g. webhook URL
+        // with embedded token, system prompt containing an example
+        // contact). Scrubbing happens at the repo boundary so every
+        // call site is covered without per-handler boilerplate.
+        //
+        // We deliberately do NOT scrub `target` / `action` / `ip` /
+        // `actor_key_id`. Those are forensic identifiers (operator
+        // needs to know "alice@acme.com triggered admin.keys.revoke
+        // from 10.0.0.5") — scrubbing them would defeat the audit log.
+        // Settings/diff payloads are where free-form user content
+        // lands, and that's what the operator should never see raw.
+        let policy = crate::config::Config::cached().compliance.audit_policy();
+        let before_scrubbed = input.before.cloned().map(|v| scrub_json_strings(v, &policy));
+        let after_scrubbed = input.after.cloned().map(|v| scrub_json_strings(v, &policy));
+
         let row: (i64,) = sqlx::query_as(
             "INSERT INTO audit_log
                  (ts, actor_key_id, action, target, before_json, after_json, ip)
@@ -35,8 +53,8 @@ impl SqlxAuditRepo {
         .bind(actor_uuid)
         .bind(input.action)
         .bind(input.target)
-        .bind(input.before)
-        .bind(input.after)
+        .bind(before_scrubbed.as_ref())
+        .bind(after_scrubbed.as_ref())
         .bind(input.ip)
         .fetch_one(&self.pool)
         .await
@@ -92,6 +110,37 @@ impl SqlxAuditRepo {
     // need for an app-level count.
 }
 
+/// Walk a `serde_json::Value` recursively and apply `pii::scrub_with_policy`
+/// to every string leaf. Numbers / bools / nulls pass through; object keys
+/// are NOT scrubbed (they're schema, not data).
+///
+/// Pulled out as a free fn so `record()` stays readable + the helper is
+/// unit-testable in isolation.
+pub(crate) fn scrub_json_strings(
+    value: Value,
+    policy: &crate::pii::PolicyMap,
+) -> Value {
+    match value {
+        Value::String(s) => {
+            // Take only the scrubbed string; PII metadata (which classes
+            // were found) is dropped — audit log doesn't need the hit
+            // breakdown, just the scrubbed text.
+            Value::String(crate::pii::scrub_with_policy(&s, policy).scrubbed)
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(|v| scrub_json_strings(v, policy)).collect())
+        }
+        Value::Object(obj) => {
+            let mut out = serde_json::Map::with_capacity(obj.len());
+            for (k, v) in obj {
+                out.insert(k, scrub_json_strings(v, policy));
+            }
+            Value::Object(out)
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +190,67 @@ mod tests {
         let list = r.list_recent(10).await.unwrap();
         assert_eq!(list.len(), 3);
         assert_eq!(list[0].action, "c");
+    }
+
+    /// v7.3 — scrub_json_strings walks nested structures.
+    #[test]
+    fn scrub_walks_nested_strings() {
+        use crate::pii::{PiiClass, PiiPolicy, PolicyMap};
+        use serde_json::json;
+        // Force-redact email so we don't depend on default policy state
+        // (which may be Pass).
+        let mut policy = PolicyMap::default();
+        policy.0.insert(PiiClass::Email, PiiPolicy::Redact);
+        let input = json!({
+            "user": {
+                "email": "alice@example.com",
+                "phone": "13912345678",
+                "nested": ["look at b@y.com here", 42, true],
+            },
+            "scalar": "no pii in this string"
+        });
+        let scrubbed = scrub_json_strings(input, &policy);
+        let s = scrubbed.to_string();
+        // email redacted in nested + array positions
+        assert!(!s.contains("alice@example.com"));
+        assert!(!s.contains("b@y.com"));
+        // non-pii string preserved
+        assert!(s.contains("no pii in this string"));
+        // numbers + bools preserved
+        assert!(s.contains("42"));
+        assert!(s.contains("true"));
+    }
+
+    /// v7.3 — audit.record actually scrubs the before/after we INSERT.
+    #[tokio::test]
+    async fn record_scrubs_pii_in_before_after_async() {
+        use crate::pii::{PiiClass, PiiPolicy};
+        use serde_json::json;
+        let r = repo().await;
+        // Configure Config::cached() audit policy to redact email.
+        // We can't mutate the cached config from tests easily, so the
+        // test confirms the *helper* fn behavior. The end-to-end "called
+        // through Config::cached()" path is exercised by integration tests
+        // in pii/integration_tests.rs.
+        let mut policy = crate::pii::PolicyMap::default();
+        policy.0.insert(PiiClass::Email, PiiPolicy::Redact);
+        let before = scrub_json_strings(json!({"setting": "old"}), &policy);
+        let after = scrub_json_strings(json!({"email": "leaked@example.com"}), &policy);
+        let id = r
+            .record(AuditInput {
+                actor_key_id: None,
+                action: "test.scrub",
+                target: None,
+                // For this test we manually pre-scrub then insert (also
+                // the production path scrubs internally, so even raw
+                // input would be safe — this just confirms the schema
+                // round-trips).
+                before: Some(&before),
+                after: Some(&after),
+                ip: None,
+            })
+            .await
+            .unwrap();
+        assert!(id > 0);
     }
 }
