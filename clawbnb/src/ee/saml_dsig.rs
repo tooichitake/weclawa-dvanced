@@ -152,6 +152,17 @@ pub fn verify_saml_response(
     expected_audience: &str,
     expected_in_response_to: Option<&str>,
 ) -> Result<VerifiedAssertion, SamlError> {
+    // v7.4 — OTel span for SAML verification. Captures payload size +
+    // expected audience so trace exporters can spot "all failures from
+    // IdP X" patterns. Implementation result (Ok/Err) is logged via
+    // tracing::warn! on the Err branch — span itself records timing.
+    let _span = tracing::info_span!(
+        "sso.saml.verify",
+        response_bytes = response_xml.len(),
+        expected_audience = expected_audience,
+        in_response_to = expected_in_response_to.unwrap_or("none"),
+    )
+    .entered();
     if response_xml.contains("<!DOCTYPE") {
         return Err(SamlError::Profile(
             "SAMLResponse contains <!DOCTYPE — XXE defense-in-depth reject".into(),

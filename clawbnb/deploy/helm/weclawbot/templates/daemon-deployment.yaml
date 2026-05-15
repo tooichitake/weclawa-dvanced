@@ -64,6 +64,13 @@ spec:
               mountPath: /root/.weclawbot
             - name: cgroup
               mountPath: /sys/fs/cgroup
+            # Read-only baseline config.json — mounted under the state
+            # PVC's path so the daemon's `state_dir` resolver picks it
+            # up. Runtime updates via PUT /config write to the PVC
+            # copy and override.
+            - name: config
+              mountPath: /etc/weclawbot
+              readOnly: true
       volumes:
         - name: state
           persistentVolumeClaim:
@@ -72,6 +79,9 @@ spec:
           hostPath:
             path: /sys/fs/cgroup
             type: Directory
+        - name: config
+          configMap:
+            name: {{ include "weclawbot.fullname" . }}-config
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -1,0 +1,36 @@
+{{- /*
+ServiceMonitor for kube-prometheus-stack — scrapes weclawbot's
+/metrics endpoint at the interval set in values.monitoring.serviceMonitor.
+
+Only emits if BOTH the daemon Deployment is enabled AND the user has
+opted into ServiceMonitor (which requires the Prometheus Operator CRDs
+to be present in the cluster — the chart doesn't depend on the operator
+being there, so this template's conditional is a "soft" enable).
+
+If you're using a non-Operator Prometheus, ignore this and configure
+the scrape job in your prometheus.yml directly (see deploy/prometheus.yml
+for the template).
+*/}}
+{{- if and .Values.daemon.enabled .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "weclawbot.fullname" . }}
+  labels:
+    {{- include "weclawbot.labels" . | nindent 4 }}
+    # kube-prometheus-stack defaults to selecting ServiceMonitors with
+    # this label. If your Prometheus uses a different selector, override
+    # via `monitoring.serviceMonitor.labels` in values.yaml.
+    release: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "weclawbot.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      # /metrics is unauthenticated by design (Prometheus standard).
+      # Protect via NetworkPolicy if needed — see networkpolicy.yaml.
+{{- end }}

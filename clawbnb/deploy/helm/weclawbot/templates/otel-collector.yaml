@@ -1,0 +1,78 @@
+{{- /*
+OTel Collector — receives OTLP traces from weclawbot (when daemon is
+built with `--features otel` and `WECLAWBOT_OTLP_ENDPOINT` points at
+this Service) and fans them out to Tempo / Jaeger / debug.
+
+Topology choice: in-cluster collector Deployment (not sidecar). Reasons:
+ - weclawbot daemon runs as a single Pod (replicas=1, Recreate strategy
+   per daemon-deployment.yaml), so sidecar gives no resilience benefit
+ - a dedicated collector lets ops reconfigure exporters without
+   bouncing the daemon
+ - resource isolation: trace volume spikes don't pressure the daemon
+*/}}
+{{- if .Values.otelCollector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "weclawbot.fullname" . }}-otel-collector
+  labels:
+    {{- include "weclawbot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "weclawbot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-collector
+  template:
+    metadata:
+      labels:
+        {{- include "weclawbot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+    spec:
+      containers:
+        - name: collector
+          image: "{{ .Values.otelCollector.image.repository }}:{{ .Values.otelCollector.image.tag }}"
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "weclawbot.fullname" . }}-otel-collector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "weclawbot.fullname" . }}-otel-collector
+  labels:
+    {{- include "weclawbot.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "weclawbot.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+  ports:
+    - port: 4317
+      name: otlp-grpc
+      targetPort: otlp-grpc
+    - port: 4318
+      name: otlp-http
+      targetPort: otlp-http
+{{- end }}

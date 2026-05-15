@@ -1,0 +1,48 @@
+{{- /*
+Ingress for the weclawbot admin/console + API surface.
+
+Routes:
+ - `/`             → console SPA + /api/v1/* endpoints (auth via Bearer)
+ - `/api/v1/billing/stripe-webhook` → Stripe POST (verified in-handler
+   via HMAC, no Bearer needed)
+ - `/api/v1/puppet/feishu/webhook/{id}` → Feishu Event Subscription
+ - `/api/v1/auth/sso/{oidc,saml}/{init,callback,acs}` → SSO public flow
+ - `/metrics`      → Prometheus scrape (no auth; protect via IP allowlist
+   at the Ingress/NetworkPolicy level if exposed externally)
+ - `/healthz`      → liveness probe (no auth)
+
+The chart only emits this Ingress when `daemon.ingress.enabled=true`.
+*/}}
+{{- if and .Values.daemon.enabled .Values.daemon.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "weclawbot.fullname" . }}
+  labels:
+    {{- include "weclawbot.labels" . | nindent 4 }}
+  {{- with .Values.daemon.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.daemon.ingress.className }}
+  {{- with .Values.daemon.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.daemon.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "weclawbot.fullname" $ }}
+                port:
+                  number: {{ $.Values.daemon.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

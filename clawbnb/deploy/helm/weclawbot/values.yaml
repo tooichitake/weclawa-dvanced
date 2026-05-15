@@ -32,6 +32,10 @@ daemon:
   ingress:
     enabled: false
     className: nginx
+    # Pass through any controller-specific annotations (e.g. nginx
+    # body-size limits to match the daemon's 2MiB request cap).
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "2m"
     hosts:
       - host: weclawbot.example.com
         paths:
@@ -41,6 +45,10 @@ daemon:
       - secretName: weclawbot-tls
         hosts:
           - weclawbot.example.com
+
+  # Per-user inbound rate limit (config.rate_limit.user_per_minute).
+  # Baked into the ConfigMap mounted at /root/.weclawbot/config.json.
+  rateLimitUserPerMinute: 30
 
   # Compliance mode env override — daemon reads via config.json but also
   # honors WECLAWBOT_COMPLIANCE_MODE env at boot. Valid: permissive |

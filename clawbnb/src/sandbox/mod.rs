@@ -68,6 +68,10 @@ impl Sandbox {
         // Phase 6.4: 旧用户保持 SHA-1，新用户用 SHA-256。lookup 函数
         // 一次性把这个决定做掉。
         let user_hash = hash_user_id_for_lookup(user_id);
+        // v7.4 — OTel span. Nests under inbound_message when called
+        // from monitor::handler. Captures user_hash so per-user spawn
+        // latency is visible in trace aggregations.
+        let _span = tracing::info_span!("sandbox.ensure", user_hash = %user_hash).entered();
         let user_dir = layout::user_dir(&user_hash);
         // v2.1.C2: metric — sandbox 创建/复用情况。Phase 5.1 引入限流后
         // 我们关心 sandbox 真正 spawn 失败的频率。is_new 标识是否新建。

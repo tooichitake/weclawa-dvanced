@@ -45,10 +45,35 @@ pub struct TrustInputs {
     pub integrity: f64,
 }
 
-// v7.0 housekeeping: `TrustInputs::neutral()` constructor + `compute()`
-// scoring function removed — neither is wired into a production path
-// (no scoring driver loop exists yet). When v3 adds the driver, revive
-// both alongside `repo::trust_async::upsert`.
+impl TrustInputs {
+    /// 新用户默认 — 中性 0.5 trust。Used by the periodic scoring
+    /// driver as the starting baseline before observed metrics are
+    /// available.
+    pub fn neutral() -> Self {
+        Self {
+            success_rate: 0.5,
+            uptime: 0.5,
+            threat: 0.5,
+            integrity: 0.5,
+        }
+    }
+}
+
+/// Weighted aggregate — 0.0 to 1.0. Clamp inputs to defend against
+/// out-of-range observations (a bug in the scoring driver could
+/// otherwise produce scores > 1 which downstream tier logic doesn't
+/// expect).
+///
+/// Restored in v7.4 alongside the driver. Formula is the plan-mandated
+/// `0.4*success + 0.2*uptime + 0.2*(1-threat) + 0.2*integrity`.
+pub fn compute(inputs: &TrustInputs) -> f64 {
+    let s = inputs.success_rate.clamp(0.0, 1.0);
+    let u = inputs.uptime.clamp(0.0, 1.0);
+    let t = inputs.threat.clamp(0.0, 1.0);
+    let i = inputs.integrity.clamp(0.0, 1.0);
+    let raw = 0.4 * s + 0.2 * u + 0.2 * (1.0 - t) + 0.2 * i;
+    raw.clamp(0.0, 1.0)
+}
 
 /// 根据 trust 分等级，决定 daemon 应用哪套限制档位。各 tier 的具体限制
 /// 数字写在 daemon config，本 enum 只标语义。
@@ -75,9 +100,18 @@ impl TrustTier {
         }
     }
 
-    // v7.0 housekeeping: `as_str()` removed alongside the dead `upsert`
-    // path that was its only caller. Serialize derive still gives us
-    // "trusted"/"standard"/etc via `#[serde(rename_all = "lowercase")]`.
+    /// Stable string form for DB column storage. Restored in v7.4
+    /// alongside the driver (the column type is TEXT, not the
+    /// JSON-derived form, so we need a sync-safe formatter that
+    /// doesn't go through serde).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::Standard => "standard",
+            Self::Restricted => "restricted",
+            Self::Quarantined => "quarantined",
+        }
+    }
 }
 
 #[cfg(test)]

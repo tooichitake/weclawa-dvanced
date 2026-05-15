@@ -1,6 +1,9 @@
 pub mod admin;
 pub mod auth;
 pub mod billing;
+// v7.4 — per-tenant usage counters for external Prometheus → Stripe
+// bridging. Compiles in default (no Stripe dep).
+pub mod billing_metering;
 pub mod feishu_webhook;
 pub mod operator;
 pub mod page;

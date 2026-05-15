@@ -67,16 +67,19 @@ services:
     restart: unless-stopped
 
   # OTel Collector — receives weclawbot's OTLP/gRPC traces (when daemon
-  # built with --features otel) and exports to Tempo/Jaeger/etc.
-  # otel-collector:
-  #   image: otel/opentelemetry-collector-contrib:0.111.0
-  #   command: ["--config=/etc/otel/config.yaml"]
-  #   volumes:
-  #     - ./otel-collector.yaml:/etc/otel/config.yaml:ro
-  #   ports:
-  #     - "127.0.0.1:4317:4317"  # OTLP gRPC
-  #     - "127.0.0.1:4318:4318"  # OTLP HTTP
-  #   restart: unless-stopped
+  # built with --features otel) and exports to a configured backend.
+  # Default config logs traces to stdout (debug exporter) so operators
+  # can sanity-check the tracing pipeline before pointing at real
+  # Tempo/Jaeger. Edit ./otel-collector.yaml to add real exporters.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"  # OTLP gRPC — weclawbot points WECLAWBOT_OTLP_ENDPOINT here
+      - "127.0.0.1:4318:4318"  # OTLP HTTP
+    restart: unless-stopped
 
 volumes:
   pgdata:

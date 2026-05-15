@@ -1,0 +1,60 @@
+# OTel Collector config for weclawbot dev/staging.
+#
+# Default exporter chain: just `debug` — traces go to the collector's
+# stdout (visible via `docker compose logs otel-collector`). Operators
+# pointing at real backends should uncomment + edit the corresponding
+# exporter block (otlp/tempo, otlp/jaeger, otlphttp/honeycomb, etc.).
+#
+# Production Helm deployment renders the equivalent config from
+# `helm/weclawbot/templates/configmap.yaml::otelCollector` driven by
+# `values.otelCollector.exporters`.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bounded memory consumer — the collector OOMs the host if traces
+  # come in faster than they're exported. memory_limiter pre-empts.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  # Batch before export. 5s is fine for dev; production with high
+  # throughput should drop to 1s for fresher dashboards.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Always-on debug exporter prints span summaries to stdout. Disable
+  # for production (it's noisy and not parseable by Tempo).
+  debug:
+    verbosity: basic
+
+  # Uncomment + fill in to forward to Tempo (the Grafana-stack trace
+  # backend). Typical endpoint: tempo:4317 in compose, or
+  # tempo-distributor.observability.svc.cluster.local:4317 in k8s.
+  # otlp/tempo:
+  #   endpoint: "tempo:4317"
+  #   tls:
+  #     insecure: true
+
+  # Uncomment + fill in for Honeycomb (HTTPS, requires API key).
+  # otlphttp/honeycomb:
+  #   endpoint: "https://api.honeycomb.io"
+  #   headers:
+  #     "x-honeycomb-team": "${HONEYCOMB_API_KEY}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+      # When adding tempo / honeycomb above, list them here too:
+      # exporters: [debug, otlp/tempo, otlphttp/honeycomb]

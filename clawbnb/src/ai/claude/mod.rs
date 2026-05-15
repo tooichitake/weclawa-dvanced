@@ -48,12 +48,28 @@ pub async fn invoke_with_system(
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<ClaudeOutput, String> {
-    #[cfg(feature = "acp")]
-    {
-        return session::invoke_acp(cfg, sandbox, system_prompt, user_prompt).await;
+    // v7.4 — OTel child span. Use `.instrument()` (not `.entered()`)
+    // because `EnteredSpan` is !Send and async fns may move tasks
+    // across threads at await points. The future-wrap form has the
+    // same observable span, just without the borrow issue.
+    use tracing::Instrument;
+    let span = tracing::info_span!(
+        "ai.claude.invoke",
+        user_hash = %sandbox.user_hash,
+        system_prompt_len = system_prompt.len(),
+        user_prompt_len = user_prompt.len(),
+        acp = cfg!(feature = "acp"),
+    );
+    async move {
+        #[cfg(feature = "acp")]
+        {
+            return session::invoke_acp(cfg, sandbox, system_prompt, user_prompt).await;
+        }
+        #[cfg(not(feature = "acp"))]
+        invoke_per_message(cfg, sandbox, system_prompt, user_prompt).await
     }
-    #[cfg(not(feature = "acp"))]
-    invoke_per_message(cfg, sandbox, system_prompt, user_prompt).await
+    .instrument(span)
+    .await
 }
 
 /// Per-message spawn implementation — daemon's original path, kept as

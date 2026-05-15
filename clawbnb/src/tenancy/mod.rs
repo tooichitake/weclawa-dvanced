@@ -24,6 +24,8 @@
 
 pub mod resolver;
 pub mod trust;
+// v7.4 — periodic per-user trust scoring driver. Plan M4.1.
+pub mod trust_driver;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

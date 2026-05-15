@@ -224,6 +224,20 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
         info!("audit_scheduler started (run every 24h, 90-day retention)");
     }
 
+    // v7.4 M4.1: trust scoring driver. Scores every active user every
+    // 15min from observed metrics (success_rate from history,
+    // uptime from active days). Result feeds tool_policy tier
+    // overlay — low-trust users automatically get Bash/Write/etc.
+    // disabled. Default feature build; no ee/otel/acp required.
+    {
+        let trust_shutdown = shutdown_rx.clone();
+        let _trust_handle = crate::tenancy::trust_driver::spawn_trust_driver(
+            pool.clone(),
+            trust_shutdown,
+        );
+        info!("trust_driver started (run every 15min, 7-day active window)");
+    }
+
     let server_handle = tokio::spawn(run_server(bind.to_string(), port));
 
     // Phase 5.4 graceful shutdown drain:

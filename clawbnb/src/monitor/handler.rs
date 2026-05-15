@@ -34,6 +34,25 @@ use crate::config::Config;
 use crate::media::inbound::resolve_message;
 use crate::sandbox::Sandbox;
 
+// v7.4 — OTel root span for the entire inbound → reply lifecycle via
+// the `tracing::instrument` attribute. The macro injects an
+// `.instrument(span).await` around the body so `EnteredSpan` (which
+// is !Send) never lives across await points. Children spans
+// (sandbox.ensure, ai.claude.invoke, etc.) auto-nest under this one
+// when the OTel layer is active.
+//
+// `skip_all` keeps the span field list small: we add only the values
+// useful for trace filtering (platform, account_id, msg_id) and let
+// nested children carry user_hash etc.
+#[tracing::instrument(
+    name = "inbound_message",
+    skip_all,
+    fields(
+        platform = "ilink-wechat",
+        account_id = %account_id,
+        msg_id = msg.message_id.unwrap_or(0),
+    )
+)]
 pub async fn handle_inbound_message(
     client: &ILinkClient,
     account_id: &str,
@@ -69,7 +88,16 @@ pub async fn handle_inbound_message(
         return;
     }
 
+    // v7.4 M3.2 — Stripe metering: this is the canonical "billable
+    // inbound" point. Past dedup + past rate limit = we'll do work
+    // for this message. Counted per-tenant so the external Stripe
+    // bridge can invoice metered customers.
+    let inbound_tenant =
+        crate::tenancy::resolver::resolve_tenant_for_account(account_id);
+    crate::service::billing_metering::record_inbound(&inbound_tenant, "ilink-wechat");
+
     // --- Per-user sandbox ---
+    let sandbox_started = std::time::Instant::now();
     let sandbox = match Sandbox::ensure(from) {
         Ok(s) => s,
         Err(e) => {
@@ -235,6 +263,14 @@ pub async fn handle_inbound_message(
         .await;
     }
     forward::forward_urls(client, base_url, token, msg, account_id, &sandbox, &ai_urls).await;
+
+    // v7.4 M3.2 — Stripe metering close-out: record wall clock from
+    // sandbox ready → reply done. Approximation of "billable compute
+    // seconds for this message" — over-counts a tiny bit (includes
+    // outbound IO) but under-counts ACP / async work that continues
+    // after reply (TODO: ACP metering in v7.5).
+    let elapsed = sandbox_started.elapsed().as_secs_f64();
+    crate::service::billing_metering::record_sandbox_seconds(&inbound_tenant, elapsed);
 }
 
 // v2.2 L2.2: 老 dispatch_reply 已搬到 `crate::ai::provider`，通过
