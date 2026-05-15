@@ -137,6 +137,11 @@ pub async fn run_server(bind: String, port: u16) -> Result<(), String> {
     let bind = &bind;
     let app = Router::new()
         .route("/", get(routes::get_root))
+        // v5.4 L5.1: split console assets (app.css / app.js / future
+        // ESM modules). embed-or-override served by `service::page`.
+        // Unauthenticated since assets are static UI shell; all API
+        // calls from app.js still go through bearer middleware.
+        .route("/console/{*path}", get(super::page::serve_asset))
         // Unauthenticated probes.
         .route("/api/health", get(routes::get_health))
         .route("/healthz", get(crate::observability::healthz::healthz))

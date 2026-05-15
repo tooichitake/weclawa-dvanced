@@ -164,12 +164,22 @@ impl Default for WebhookConfig {
 pub struct SandboxConfig {
     /// Container image used to spawn per-user gVisor sandboxes.
     pub image: String,
+    /// v5.4 L4.1: 全局并发 spawn 上限。-1 = CPU 核数；0 = 无限；
+    /// >0 = 指定值。超出 → 第 31 个 inbound 等到前面 release。
+    /// 30s 内仍未拿到 slot → fail-open + log warn + metric。
+    #[serde(default = "default_max_concurrent_spawns")]
+    pub max_concurrent_spawns: i64,
+}
+
+fn default_max_concurrent_spawns() -> i64 {
+    -1
 }
 
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
             image: "localhost/weclawbot-sandbox-base:dev".to_string(),
+            max_concurrent_spawns: -1,
         }
     }
 }

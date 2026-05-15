@@ -44,7 +44,7 @@ discord-gateway = ["dep:tokio-tungstenite", "dep:futures"]
 # 默认 off，hosted SaaS 部署时 `--features ee` 编进 binary。Open-source
 # 用户使用核心功能不受影响。当前 ee 子模块只搭骨架（无实际 SSO 实现），
 # v3 PR 增量补全。
-ee = ["dep:jsonwebtoken"]
+ee = ["dep:jsonwebtoken", "dep:rsa", "dep:x509-parser"]
 
 # v3 OpenTelemetry — distributed tracing via OTLP exporter (default to
 # stdout in dev, configurable endpoint in prod). 多租户 SaaS 跨 service
@@ -77,7 +77,12 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 rand = "0.9"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-tower-http = { version = "0.6", features = ["cors", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "fs"] }
+# v5.4 L5.1: assets/console/ 拆分后嵌入 binary 让 single-file 部署不破。
+# operator override 仍走 ~/.weclawbot/console/ 路径（如有），fs override
+# 用 tower_http::services::ServeDir 挂载；fallback 通过本 crate 的
+# include_dir!() 把 assets/console/ 全部 embed 进 binary。
+include_dir = "0.7"
 urlencoding = "2"
 aes = "0.8"
 hex = "0.4"
@@ -136,6 +141,15 @@ opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio"]
 # stick with admin keys). JWKS endpoint fetch is via reqwest (already
 # in tree); jsonwebtoken handles RS256/ES256 verify.
 jsonwebtoken = { version = "9", optional = true }
+
+# v5.4 N4 — SAML XML signature verify dependencies (only with `--features ee`).
+# `rsa` is the standard pure-Rust RSA crate (3M+ downloads/mo); `x509-parser`
+# is the canonical X.509 PEM/DER parser (5M+ downloads/mo). Together they let
+# us extract the IdP's RSA pubkey from the cert and verify
+# RSA-PKCS#1-v1_5-SHA256 over SignedInfo bytes. C14N canonicalization is the
+# remaining gap — see `ee::saml` docstring for SP-proxy production guidance.
+rsa = { version = "0.9", optional = true, features = ["sha2"] }
+x509-parser = { version = "0.16", optional = true }
 
 # v5.2 O3 — Discord Gateway WebSocket. tokio-tungstenite 是 tungstenite
 # 的 tokio async wrapper，rustls-tls 让 binary 不依赖系统 OpenSSL。

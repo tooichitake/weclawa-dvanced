@@ -9,13 +9,20 @@
 //! - `stream_json` — parse the JSONL event stream into `ClaudeOutput`.
 
 pub mod prompt;
+#[cfg(feature = "acp")]
+pub mod session;
 pub mod stream_json;
 
+#[cfg(not(feature = "acp"))]
 use std::process::Stdio;
+#[cfg(not(feature = "acp"))]
 use std::time::Duration;
 
+#[cfg(not(feature = "acp"))]
 use serde_json::Value;
+#[cfg(not(feature = "acp"))]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(not(feature = "acp"))]
 use tracing::{debug, warn};
 
 use crate::ai::{ClaudeOutput, CliConfig};
@@ -37,12 +44,39 @@ pub async fn invoke(
 /// `system_prompt` (when non-empty) is wired through `--system-prompt`
 /// so the model sees it as a real system instruction. `user_prompt`
 /// goes to stdin.
+///
+/// v5.4 L4.1: 当 `--features acp` 开启时，path 切到
+/// [`session::invoke_acp`] —— 复用 per-user 长跑 claude 进程。默认
+/// per-message spawn 路径不变。
 pub async fn invoke_with_system(
     cfg: &CliConfig,
     sandbox: &Sandbox,
     system_prompt: &str,
     user_prompt: &str,
 ) -> Result<ClaudeOutput, String> {
+    #[cfg(feature = "acp")]
+    {
+        return session::invoke_acp(cfg, sandbox, system_prompt, user_prompt).await;
+    }
+    #[cfg(not(feature = "acp"))]
+    invoke_per_message(cfg, sandbox, system_prompt, user_prompt).await
+}
+
+/// Per-message spawn implementation — daemon's original path, kept as
+/// fallback when `acp` feature is off.
+#[cfg(not(feature = "acp"))]
+async fn invoke_per_message(
+    cfg: &CliConfig,
+    sandbox: &Sandbox,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<ClaudeOutput, String> {
+    // v5.4 L4.1: per-message scratch cleanup + concurrency cap.
+    // 1) 清理上一轮在 /work/output/ 下留下的临时文件
+    // 2) acquire 一个 spawn slot —— 上限超时 fail-open，保证 inbound 不丢
+    crate::sandbox::ephemeral::scrub_per_message_scratch(sandbox);
+    let _permit = crate::sandbox::ephemeral::acquire_spawn_slot().await;
+
     let mut claude_args: Vec<&str> = vec!["-p", "--output-format", "stream-json", "--verbose"];
     if !system_prompt.is_empty() {
         claude_args.push("--system-prompt");

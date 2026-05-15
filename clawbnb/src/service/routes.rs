@@ -58,11 +58,24 @@ pub async fn post_qr_create() -> Json<Value> {
         .fetch_qr_code("https://ilinkai.weixin.qq.com", "3", &local_tokens)
         .await
     {
-        Ok(qr) => Json(json!({
-            "ok": true,
-            "qrcode": qr.qrcode,
-            "qrcode_img_content": qr.qrcode_img_content,
-        })),
+        Ok(qr) => {
+            // v5.4 bug fix: iLink 返的 `qrcode_img_content` 是 URL 字符串
+            // 不是 base64 PNG。GUI 旧版直接 `data:image/png;base64,` + URL
+            // 当然渲不出 QR —— 这里 server-side 用 qrcode crate 把 URL
+            // 编码成 SVG QR，返回完整 data URL 给 GUI。
+            let qr_data_url = crate::api::qr_render::url_to_qr_data_url(
+                &qr.qrcode_img_content,
+            )
+            .unwrap_or_default();
+            Json(json!({
+                "ok": true,
+                "qrcode": qr.qrcode,
+                // 完整 data URL — GUI 直接 `<img src=...>` 即可
+                "qrcode_img_data_url": qr_data_url,
+                // 原始 URL 字段也保留，便于 debug + 终端 fallback
+                "qrcode_img_content": qr.qrcode_img_content,
+            }))
+        }
         Err(e) => Json(json!({"ok": false, "error": e})),
     }
 }
@@ -105,12 +118,20 @@ pub async fn post_relogin(Path(id): Path<String>) -> Json<Value> {
         .fetch_qr_code("https://ilinkai.weixin.qq.com", "3", &local_tokens)
         .await
     {
-        Ok(qr) => Json(json!({
-            "ok": true,
-            "account_id": id,
-            "qrcode": qr.qrcode,
-            "qrcode_img_content": qr.qrcode_img_content,
-        })),
+        Ok(qr) => {
+            // v5.4: render QR server-side (see post_qr_create comment).
+            let qr_data_url = crate::api::qr_render::url_to_qr_data_url(
+                &qr.qrcode_img_content,
+            )
+            .unwrap_or_default();
+            Json(json!({
+                "ok": true,
+                "account_id": id,
+                "qrcode": qr.qrcode,
+                "qrcode_img_data_url": qr_data_url,
+                "qrcode_img_content": qr.qrcode_img_content,
+            }))
+        }
         Err(e) => Json(json!({"ok": false, "error": e})),
     }
 }

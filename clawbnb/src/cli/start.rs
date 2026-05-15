@@ -240,6 +240,11 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
         );
     }
 
+    // v5.4 L4.1: ACP mode 下还有 per-user long-running claude 进程，
+    // drain 完 poller 后显式 kill 它们让 daemon exit 干净（不留 zombie）。
+    #[cfg(feature = "acp")]
+    crate::ai::claude::session::shutdown_all().await;
+
     server_handle.abort();
     crate::daemon::pid::remove_pid();
     info!("weclawbot stopped");

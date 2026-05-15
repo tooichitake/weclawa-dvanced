@@ -237,48 +237,116 @@ fn extract_between(s: &str, start: &str, end: &str) -> Option<String> {
     Some(s[..j].to_string())
 }
 
-/// Verify RSA-SHA256 signature on raw signed_info bytes against IdP cert
-/// PEM-encoded public key.
+/// v5.4: real RSA-PKCS#1 v1.5 SHA-256 verify on the SignedInfo bytes
+/// against the IdP X.509 cert's RSA public key.
 ///
-/// **简化点**：本期通过 `rsa` crate 直接 verify；不做严格 X.509 chain
-/// validation (IdP cert 既是 trust anchor 又是 leaf，operator 配的就是
-/// trusted issuer)。生产环境若需 cert chain / CRL / OCSP，推荐前置
-/// SP-proxy 处理。
+/// ## What this does
+///
+/// 1. PEM → DER → X.509 → RSA public key (via `x509-parser` + `rsa`)
+/// 2. base64 → raw signature bytes
+/// 3. `verifying_key.verify(signed_info_bytes, &signature)` → reject if not
+///    signed by the IdP's private key counterpart
+///
+/// ## What this does NOT do (production gap — see SP-proxy guidance)
+///
+/// - **Exclusive XML Canonicalization (c14n) per W3C 2008 spec.** The
+///   IdP signs the *canonicalized* `<ds:SignedInfo>` bytes; we sign the
+///   raw extracted substring. Attackers who can inject whitespace /
+///   reorder attributes / play with namespace prefixes may bypass
+///   verification. **Production deployments should put weclawbot behind
+///   `mod_auth_mellon` or `shibboleth-sp` which do canonical-form
+///   verification in C against libxmlsec1.**
+/// - X.509 chain validation. We trust the operator-configured leaf cert
+///   as the issuer; no CRL/OCSP/intermediate-CA walk.
+/// - Algorithm flexibility. Only RSA-SHA256 — modern IdPs (Okta/Azure
+///   AD/AD FS) all default to this; RSA-SHA1 explicitly rejected as
+///   deprecated.
+#[cfg(feature = "ee")]
 fn verify_signature_rsa_sha256(
     signed_info: &str,
     signature_b64: &str,
     cert_pem: &str,
 ) -> Result<(), WeclawError> {
     use base64::{engine::general_purpose, Engine as _};
-    // 当前 weclawbot 没装 rsa crate ── 真做 verify 需要 v5.2 PR 加
-    // 依赖。本期检查"看起来像签名"，避免明显篡改通过 (空 / 极短)。
+    use rsa::pkcs1v15::{Signature, VerifyingKey};
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::sha2::Sha256;
+    use rsa::signature::Verifier;
+    use rsa::RsaPublicKey;
+
+    if signed_info.is_empty() {
+        return Err(WeclawError::BadRequest("signed_info empty".into()));
+    }
+
+    // Step 1: decode signature b64 → bytes
     let sig_bytes = general_purpose::STANDARD
         .decode(signature_b64.as_bytes())
         .map_err(|e| WeclawError::BadRequest(format!("signature base64: {e}")))?;
     if sig_bytes.len() < 128 {
         return Err(WeclawError::BadRequest(format!(
-            "signature too short ({} bytes) — RSA-2048 expects 256",
+            "signature too short ({} bytes) — RSA-2048+ expects ≥256",
             sig_bytes.len()
         )));
     }
-    if cert_pem.is_empty() || !cert_pem.contains("BEGIN CERTIFICATE") {
+
+    // Step 2: parse PEM cert → DER → extract SubjectPublicKeyInfo (SPKI)
+    if !cert_pem.contains("BEGIN CERTIFICATE") {
         return Err(WeclawError::BadRequest(
-            "IdP cert PEM missing or malformed".into(),
+            "IdP cert PEM missing BEGIN CERTIFICATE marker".into(),
         ));
     }
-    if signed_info.is_empty() {
-        return Err(WeclawError::BadRequest("signed_info empty".into()));
-    }
-    // v5.2 完整路径：从 PEM 解 X.509 → 抽 RSA pub key → ring/rsa
-    // verify_pkcs1v15_sha256(pubkey, signed_info_canonicalized, sig_bytes)。
-    // 当前 placeholder：基础形态校验通过，仅在 v5.1 ship 之前禁用
-    // 真生产 SAML（应仍用 SP-proxy 模式）。
-    tracing::warn!(
-        "SAML signature verify: basic structural check only (v5.1) — \
-         production deployments should use mod_auth_mellon / shibboleth-sp \
-         in front of weclawbot for full RFC-compliant verify"
+    let pem_blocks = x509_parser::pem::Pem::iter_from_buffer(cert_pem.as_bytes())
+        .next()
+        .ok_or_else(|| WeclawError::BadRequest("IdP cert: no PEM block".into()))?
+        .map_err(|e| WeclawError::BadRequest(format!("IdP cert PEM parse: {e}")))?;
+    let cert = pem_blocks
+        .parse_x509()
+        .map_err(|e| WeclawError::BadRequest(format!("IdP cert X.509 parse: {e}")))?;
+
+    // Step 3: SPKI DER → RsaPublicKey (rsa crate accepts PKCS#8 DER which
+    // is identical to the SPKI form X.509 carries).
+    let spki_der = cert.public_key().raw;
+    let rsa_pubkey = RsaPublicKey::from_public_key_der(spki_der).map_err(|e| {
+        WeclawError::BadRequest(format!(
+            "IdP cert pubkey not RSA (DER decode failed): {e}"
+        ))
+    })?;
+
+    // Step 4: verify signature
+    let verifying_key = VerifyingKey::<Sha256>::new(rsa_pubkey);
+    let signature = Signature::try_from(sig_bytes.as_slice())
+        .map_err(|e| WeclawError::BadRequest(format!("signature byte length: {e}")))?;
+    verifying_key
+        .verify(signed_info.as_bytes(), &signature)
+        .map_err(|e| {
+            WeclawError::BadRequest(format!(
+                "SAMLResponse signature verify failed: {e} — \
+                 possible forgery or wrong IdP cert"
+            ))
+        })?;
+
+    tracing::debug!(
+        "SAML signature verify: RSA-PKCS#1 v1.5 SHA-256 passed \
+         (bytes={}, signed_info_len={}). \
+         Note: c14n is NOT yet applied — production should use SP-proxy.",
+        sig_bytes.len(),
+        signed_info.len()
     );
     Ok(())
+}
+
+/// Non-ee build: no SAML verify dependencies linked. Reject everything.
+/// SAML routes are themselves gated on `cfg(feature = "ee")`, so this
+/// shim is only here to keep `verify_saml_response_basic` compilable.
+#[cfg(not(feature = "ee"))]
+fn verify_signature_rsa_sha256(
+    _signed_info: &str,
+    _signature_b64: &str,
+    _cert_pem: &str,
+) -> Result<(), WeclawError> {
+    Err(WeclawError::Internal(
+        "SAML verify requires --features ee (rsa + x509-parser crates)".into(),
+    ))
 }
 
 /// XML 字符串字面 escape — & < > " 转实体。
@@ -361,19 +429,37 @@ mod tests {
     }
 
     #[test]
-    fn verify_response_extracts_name_id_when_signature_looks_valid() {
+    fn verify_response_rejects_fake_cert() {
+        // v5.4: real RSA verify now in place — fake cert content (MOCK
+        // placeholder) is correctly rejected. Previous test asserted
+        // extraction succeeded with stub cert; that's no longer the
+        // right contract.
         let cfg = sample_cfg();
-        // Build a fake SAMLResponse with a 256-byte signature placeholder
         let sig = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 256]);
         let xml = format!(
             "<ds:SignedInfo>placeholder</ds:SignedInfo>\
              <ds:SignatureValue>{}</ds:SignatureValue>\
-             <saml:NameID Format=\"...\">alice@example.com</saml:NameID>\
-             <AttributeName=\"email\"><AttributeValue>alice@example.com</AttributeValue>",
+             <saml:NameID Format=\"...\">alice@example.com</saml:NameID>",
             sig
         );
-        let r = verify_saml_response_basic(&cfg, &xml).unwrap();
-        assert_eq!(r.subject, "alice@example.com");
+        let r = verify_saml_response_basic(&cfg, &xml);
+        assert!(
+            r.is_err(),
+            "fake cert (MOCK PEM body) must fail X.509 parse / RSA verify"
+        );
+    }
+
+    #[test]
+    fn parse_extracts_name_id_independent_of_verify() {
+        // Structural parsing should succeed even when signature verify
+        // would fail downstream — confirms the path stages are
+        // independent (so observability can show "parsed OK but verify
+        // failed" in audit logs).
+        let xml = "<ds:SignedInfo>x</ds:SignedInfo>\
+                   <ds:SignatureValue>YWJj</ds:SignatureValue>\
+                   <saml:NameID Format=\"f\">alice@example.com</saml:NameID>";
+        let parts = parse_saml_response(xml).unwrap();
+        assert_eq!(parts.name_id, "alice@example.com");
     }
 
     #[test]

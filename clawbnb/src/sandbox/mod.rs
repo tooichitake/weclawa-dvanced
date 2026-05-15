@@ -10,6 +10,7 @@
 //! Spawning `claude -p` is wrapped by `bwrap`-style isolation; here we use
 //! podman + runsc (gVisor). See `exec.rs`.
 
+pub mod ephemeral;
 pub mod exec;
 pub mod layout;
 pub mod lifecycle;
