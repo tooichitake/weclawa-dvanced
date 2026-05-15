@@ -24,28 +24,58 @@
 
 #[cfg(feature = "otel")]
 pub fn init(service_name: &str) -> Result<(), String> {
-    // OTel 0.26 API 在 patch 版本之间反复 churn（`SpanExporter::builder`
-    // vs `new_tonic()` vs `new_pipeline()`）。pinning 具体 builder 调
-    // 用风险高 —— 一次 cargo update 就 break。
-    //
-    // 当前 init 保留为"deps 已编译进 binary + env 读取 + tracing log"
-    // 的占位形态。真 export wiring 推迟到：
-    // 1. OTel 0.27+ stable LTS 出来（builder API 稳定后）OR
-    // 2. operator 选定具体 backend（Tempo / Honeycomb / Jaeger）time
-    //    再绑定该 backend 推荐的 builder 路径
-    //
-    // 这层占位让 `--features otel` 编译过、字符串能扫到、tracing
-    // 仍正常 stdout JSON 输出。
+    // v5.1 N3: 真 wire — OTel 0.27 API。endpoint 默认 localhost:4317
+    // (gRPC OTLP)，env `WECLAWBOT_OTLP_ENDPOINT` 可改。Collector 不可达
+    // 时 daemon 启动仍跑 (warn log)，避免 OTel 故障阻塞 production。
+    use opentelemetry::global;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{runtime, trace as sdktrace, Resource};
+
     let endpoint = std::env::var("WECLAWBOT_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:4317".to_string());
-    let _: opentelemetry::KeyValue = opentelemetry::KeyValue::new(
+
+    let exporter_res = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(&endpoint)
+        .build();
+    let exporter = match exporter_res {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                "OTel exporter build failed ({e}) — falling back to stub (deps loaded, no export)"
+            );
+            return Ok(());
+        }
+    };
+
+    let resource = Resource::new(vec![KeyValue::new(
         "service.name",
         service_name.to_string(),
-    );
+    )]);
+
+    let provider = sdktrace::TracerProvider::builder()
+        .with_batch_exporter(exporter, runtime::Tokio)
+        .with_resource(resource)
+        .build();
+
+    // Set global tracer provider — batch exporter starts pushing spans to
+    // OTLP collector as soon as code uses `global::tracer("name").start(...)`.
+    //
+    // **tracing-opentelemetry bridge layer**: 装 layer 需要拿到现有
+    // `tracing_subscriber::Registry`，但 daemon::log::init 已经 set 了一份
+    // FmtSubscriber 没 Registry expose 接口。v5.2 refactor 把 log init
+    // 改成 Registry-based，能把 OTel layer 加进去；当前**直接调** OTel
+    // tracer 路径仍 work（global::tracer("weclawbot").start(...)），只是
+    // tracing::info_span!() macro 不自动桥接。
+    let _tracer = provider.tracer("weclawbot");
+    global::set_tracer_provider(provider);
+
     tracing::info!(
         service = %service_name,
         endpoint = %endpoint,
-        "OTel feature compiled (deps loaded); OTLP export wiring stub — see otel.rs"
+        "OTel OTLP exporter initialized"
     );
     Ok(())
 }

@@ -32,7 +32,21 @@ use sqlx::SqlitePool;
 
 use crate::storage::db::DbError;
 
-/// sqlx pool 类型 alias —— 跟 [`crate::storage::db::DbPool`] (r2d2) 并行。
+/// sqlx pool 类型 alias。
+///
+/// ## v5.2 Postgres backend 路径（设计 sketch）
+///
+/// 当前 SqlitePool 直用。Postgres 切换两条路：
+/// - **Option A: sqlx::AnyPool** — 单 binary 双 backend。要把所有
+///   `?1 / ?2` 数字 placeholder 改无序号 `?`，SQL `INSERT OR IGNORE` /
+///   `VACUUM INTO` 等 SQLite-only 子句换 Postgres-portable 写法。
+///   ~3-5 周机械化迁移 + 验证。
+/// - **Option B: cfg-gated 双类型** — `#[cfg(feature="postgres")]
+///   type AsyncDbPool = sqlx::PgPool;` 编译期挑 backend。CI 矩阵跑两份；
+///   SQL 方言差异 cfg 切换。~2-3 周。
+///
+/// `postgres` Cargo feature 已就位（`sqlx/postgres` driver 编入 binary），
+/// 真切换走 v5.2 PR。当前 SqlitePool 直用。
 pub type AsyncDbPool = SqlitePool;
 
 /// 打开默认路径的 sqlx pool。**migrations 应已由 rusqlite/refinery

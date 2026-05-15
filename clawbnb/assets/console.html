@@ -280,6 +280,9 @@
   <button data-tab="audit" id="tab-btn-audit" hidden>审计日志</button>
   <button data-tab="backup" id="tab-btn-backup" hidden>备份</button>
   <button data-tab="admin_keys" id="tab-btn-admin-keys" hidden>子管理员</button>
+  <button data-tab="tenants" id="tab-btn-tenants" hidden>租户</button>
+  <button data-tab="billing" id="tab-btn-billing" hidden>计费</button>
+  <button data-tab="sso" id="tab-btn-sso" hidden>SSO</button>
 </nav>
 
 <main>
@@ -572,6 +575,75 @@
       </div>
     </div>
   </section>
+
+  <!-- v5.1 N2: 租户管理（仅 super_admin 可见） -->
+  <section id="tab-tenants" class="tab-content" hidden>
+    <div class="card">
+      <h2>租户 (Tenants)</h2>
+      <p class="small">
+        多租户 hosted 模式：每个客户 / 部门一个独立 tenant。资源隔离 (accounts, users, settings, audit) 按 tenant_id 切片。
+        v2 默认部署只有 <code>default</code> 一个租户。
+      </p>
+      <div id="tenants-list"><div class="empty">加载中…</div></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn secondary" id="tenants-refresh">刷新</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- v5.1 N2: 计费（Stripe；仅 super_admin） -->
+  <section id="tab-billing" class="tab-content" hidden>
+    <div class="card">
+      <h2>计费 (Stripe)</h2>
+      <p class="small">
+        Stripe webhook 接 <code>POST /api/v1/billing/stripe-webhook</code>（HMAC-SHA256 验签）。事件实时改 <code>tenants.billing_status</code>:
+        <code>invoice.paid</code> → active；<code>invoice.payment_failed</code> → pending (grace 7d)；
+        <code>customer.subscription.deleted</code> → suspended。
+      </p>
+      <h3>Webhook 配置</h3>
+      <pre id="billing-config"><code>endpoint: https://&lt;your-daemon&gt;/api/v1/billing/stripe-webhook
+secret env: WECLAWBOT_STRIPE_WEBHOOK_SECRET (whsec_...)
+signing algorithm: HMAC-SHA256 (Stripe-Signature header)
+replay window: 5 min</code></pre>
+      <h3>Tenants 当前计费状态</h3>
+      <div id="billing-tenants-list"><div class="empty">加载中…</div></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn secondary" id="billing-refresh">刷新</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- v5.1 N2: SSO 配置（OIDC / SAML；仅 super_admin） -->
+  <section id="tab-sso" class="tab-content" hidden>
+    <div class="card">
+      <h2>SSO (OIDC + SAML)</h2>
+      <p class="small">
+        企业版 (<code>--features ee</code>) 支持 OIDC (Okta/Azure AD/Google) 和 SAML 2.0 (Okta/AD FS) 接管员工登录。
+        每 tenant 一份 IdP 配置；首次 SSO 登录自动 JIT-mint <code>read_only</code> admin key，super_admin 后续可升级 role。
+      </p>
+      <h3>OIDC 配置（per-tenant）</h3>
+      <table class="kv">
+        <tr><td>Issuer</td><td>https://&lt;idp&gt; (e.g. https://accounts.google.com)</td></tr>
+        <tr><td>client_id</td><td>来自 IdP application page</td></tr>
+        <tr><td>client_secret</td><td>来自 IdP application page (sensitive)</td></tr>
+        <tr><td>redirect_uri</td><td>https://&lt;daemon&gt;/api/v1/auth/sso/oidc/callback</td></tr>
+        <tr><td>scopes</td><td>openid email profile (default)</td></tr>
+        <tr><td>jwks_uri</td><td>来自 IdP <code>.well-known/openid-configuration</code></td></tr>
+      </table>
+      <h3>SAML 配置（per-tenant）</h3>
+      <table class="kv">
+        <tr><td>sp_entity_id</td><td>https://&lt;daemon&gt;/api/v1/auth/sso/saml/metadata</td></tr>
+        <tr><td>idp_entity_id</td><td>来自 IdP metadata XML</td></tr>
+        <tr><td>idp_sso_url</td><td>HTTP-Redirect binding endpoint</td></tr>
+        <tr><td>sp_acs_url</td><td>https://&lt;daemon&gt;/api/v1/auth/sso/saml/acs</td></tr>
+        <tr><td>idp_x509_cert_pem</td><td>用于 verify SAMLResponse signature (v5.1 实施)</td></tr>
+      </table>
+      <p class="small" style="margin-top:14px;">
+        <strong>配置入口</strong>：当前通过 <code>tenants</code> 表 SQL UPDATE
+        <code>sso_oidc_json</code> / <code>sso_saml_json</code> 列。完整 GUI form 留 v5.2 PR。
+      </p>
+    </div>
+  </section>
 </main>
 
 <div class="footer">weclawbot · WeChat ⇄ Claude Code bridge · gVisor-sandboxed per user</div>
@@ -591,7 +663,48 @@ const tabs = {
   logs:        () => loadLogs(),
   metrics:     () => loadMetrics(),
   sandboxes:   () => loadSandboxes(),
+  tenants:     () => loadTenants(),
+  billing:     () => loadBilling(),
+  sso:         () => loadSso(),
 };
+
+// v5.1 N2: tenants/billing/sso tab loaders. 当前 backend 还没有
+// /api/v1/tenants/list 路由 (留 v5.2)，本期只渲染 "default" tenant 占位
+// 让 super_admin 看到面板能 navigate，配置真改还得走 SQL。
+async function loadTenants() {
+  const el = document.getElementById('tenants-list');
+  el.innerHTML = `
+    <table class="kv">
+      <tr><th>id</th><th>name</th><th>status</th><th>billing_status</th><th>stripe_customer_id</th></tr>
+      <tr><td><code>default</code></td><td>Default Tenant</td>
+          <td><span class="badge badge-ok">active</span></td>
+          <td><span class="badge badge-ok">active</span></td>
+          <td class="small">(unset)</td></tr>
+    </table>
+    <p class="small" style="margin-top:10px;">
+      v5.1: list_tenants HTTP 路由留 v5.2；本期通过 <code>weclawbot</code> CLI 或直接
+      <code>SELECT * FROM tenants</code> 查看 + <code>UPDATE</code> 改配置。
+    </p>`;
+}
+
+async function loadBilling() {
+  const el = document.getElementById('billing-tenants-list');
+  el.innerHTML = `
+    <table class="kv">
+      <tr><th>tenant</th><th>billing_status</th><th>period_end</th><th>last_event</th></tr>
+      <tr><td><code>default</code></td>
+          <td><span class="badge badge-ok">active</span></td>
+          <td class="small">(unset)</td>
+          <td class="small">(none)</td></tr>
+    </table>
+    <p class="small" style="margin-top:10px;">
+      v5.1: list 接口留 v5.2；webhook 入站事件实时更新 DB。
+    </p>`;
+}
+
+async function loadSso() {
+  // SSO tab 静态文档；配置真改通过 tenants 表 SQL。无 API 调用。
+}
 
 document.querySelectorAll('nav.tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -728,6 +841,10 @@ async function bootstrap() {
     document.getElementById('tab-btn-backup').hidden = false;
     document.getElementById('tab-btn-config').hidden = false;
     document.getElementById('dashboard-backup-card').hidden = false;
+    // v5.1 N2 — multi-tenant / billing / sso 也仅 super_admin
+    document.getElementById('tab-btn-tenants').hidden = false;
+    document.getElementById('tab-btn-billing').hidden = false;
+    document.getElementById('tab-btn-sso').hidden = false;
   }
   // read_write 及以上看 audit / logs / metrics / sandboxes
   if (currentAdmin.role === 'super_admin' || currentAdmin.role === 'read_write') {

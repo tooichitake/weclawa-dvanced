@@ -127,13 +127,28 @@ pub async fn handle_inbound_update(
     };
     sandbox.touch_profile();
 
-    // Step 4: process_inbound (rate_limit + dispatch chain)
+    // Step 4: download attachments (v5.1 N1)
     let config = crate::config::Config::cached();
+    let attachments = match download_telegram_attachments(&bot, token, &sandbox, update).await {
+        Ok(a) => a,
+        Err(e) => {
+            warn!("[{account_id}] telegram attach download: {e} — proceeding without files");
+            Vec::new()
+        }
+    };
     let content = crate::media::inbound::InboundContent {
         text: common.text.clone(),
-        attachments: vec![], // v3.5: 真填 telegram attachments
+        attachments,
         errors: vec![],
     };
+    // 更新 CommonInbound.attachments 以便 webhook payload 携带（虽然现在
+    // 没 caller 用到，但保持 source-of-truth 一致）。
+    let mut common = common;
+    common.attachments = content
+        .attachments
+        .iter()
+        .map(|a| a.path.clone())
+        .collect();
     let prov_out = common::process_inbound(&common, &sandbox, &content, &config).await;
 
     // Step 5: send reply
@@ -183,6 +198,73 @@ async fn send_reply(
 }
 
 // v3.6 I1: helpers 已抽到 `crate::tenancy::resolver`，所有协议共用。
+
+/// v5.1 N1: 下载 Telegram message 上的所有 attachment 到
+/// `sandbox/media_inbound/`。返回填好 path / kind / original_name 的
+/// `media::inbound::Attachment` 列表（跟 iLink 路径产出格式一致，让
+/// 下游 dispatch_reply 不需要分协议差异）。
+///
+/// 失败 (token 错 / 文件 > 20MB / fs IO) → Err 给 caller log，但不阻
+/// 塞当前消息（caller fail-open 走 text-only）。
+async fn download_telegram_attachments(
+    bot: &TelegramBot,
+    token: &str,
+    sandbox: &Sandbox,
+    update: &Update,
+) -> Result<Vec<crate::media::inbound::Attachment>, String> {
+    let msg = match update.message.as_ref() {
+        Some(m) => m,
+        None => return Ok(Vec::new()),
+    };
+    let files = msg.collect_attachments();
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let media_dir = sandbox.media_inbound();
+    if !media_dir.exists() {
+        std::fs::create_dir_all(&media_dir).map_err(|e| format!("mkdir media: {e}"))?;
+    }
+
+    let mut out = Vec::with_capacity(files.len());
+    for (file_id, suggested_name) in files {
+        // 让 path 文件名稳定 + 唯一：用 file_id + 用户给的 suggested_name 后缀
+        let safe_name = suggested_name
+            .as_deref()
+            .map(|n| n.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '_' || *c == '-').collect::<String>())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("tg-{file_id}"));
+        let dest = media_dir.join(&safe_name);
+
+        let kind: &'static str = if safe_name.ends_with(".ogg") || safe_name.starts_with("voice-") {
+            "voice"
+        } else if safe_name.starts_with("photo-") || safe_name.ends_with(".jpg") || safe_name.ends_with(".png") {
+            "image"
+        } else {
+            "file"
+        };
+
+        match bot.download_attachment(token, &file_id, &dest).await {
+            Ok(bytes) => {
+                tracing::info!(
+                    "telegram attach: {file_id} -> {} ({bytes} bytes, kind={kind})",
+                    dest.display()
+                );
+                out.push(crate::media::inbound::Attachment {
+                    path: dest,
+                    original_name: suggested_name,
+                    embedded_text: None,
+                    kind,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("telegram attach {file_id} skip: {e}");
+                // 不阻塞 — 多附件场景一个失败不影响别的
+            }
+        }
+    }
+    Ok(out)
+}
 
 #[cfg(test)]
 mod tests {
