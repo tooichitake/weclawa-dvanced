@@ -196,26 +196,85 @@ pub async fn apply_migrations(pool: &AsyncDbPool) -> Result<(), DbError> {
     .map_err(|e| DbError::Migration(format!("check refinery: {e}")))?;
 
     if refinery_exists.is_some() {
-        // 把所有 V*.sql 当成已 apply 记录进 _sqlx_migrations（首次切换）。
-        // 第二次启动时元表已经有所有条目，正常 skip。
+        // v5.5 fix (regression from v4.2): 不再把所有 V*.sql 当成
+        // applied 标记。**只**把 refinery 真跑过的 row 标进 `_sqlx_migrations`。
+        // 剩下的 V*.sql 走下面正常的 apply loop ── 真没跑的 DDL 这次会
+        // 跑。
+        //
+        // refinery_schema_history row 形如：(version=1, name="init")。
+        // V*.sql 文件名 `V0001__init.sql`。匹配规则：
+        //   refinery.version == sqlx file 头 4 位数字
+        //   AND refinery.name == sqlx file `__` 后的 stem
+        let refinery_rows: Vec<(i64, String)> =
+            sqlx::query_as("SELECT version, name FROM refinery_schema_history")
+                .fetch_all(pool)
+                .await
+                .map_err(|e| {
+                    DbError::Migration(format!("read refinery rows: {e}"))
+                })?;
+        let refinery_keys: std::collections::HashSet<(i64, String)> =
+            refinery_rows.into_iter().collect();
+
         let now = chrono::Utc::now().to_rfc3339();
-        for (name, _sql) in MIGRATION_FILES {
-            sqlx::query(
-                "INSERT INTO _sqlx_migrations (version, applied_at) VALUES (?, ?)
-                 ON CONFLICT (version) DO NOTHING",
-            )
-            .bind(*name)
-            .bind(&now)
-            .execute(pool)
-            .await
-            .map_err(|e| DbError::Migration(format!("import refinery {name}: {e}")))?;
+        let mut imported = 0usize;
+        for (file_name, _sql) in MIGRATION_FILES {
+            if let Some((ver, stem)) = parse_v_filename(file_name) {
+                if refinery_keys.contains(&(ver, stem.to_string())) {
+                    sqlx::query(
+                        "INSERT INTO _sqlx_migrations (version, applied_at)
+                         VALUES (?, ?)
+                         ON CONFLICT (version) DO NOTHING",
+                    )
+                    .bind(*file_name)
+                    .bind(&now)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| {
+                        DbError::Migration(format!("import refinery {file_name}: {e}"))
+                    })?;
+                    imported += 1;
+                }
+            }
         }
         tracing::info!(
-            "sqlx migration runner: detected existing refinery_schema_history — \
-             imported {} entries into _sqlx_migrations (no DDL re-applied)",
+            "sqlx migration runner: refinery history present — imported {} of \
+             {} entries into _sqlx_migrations; un-imported V*.sql will be \
+             applied below if needed",
+            imported,
             MIGRATION_FILES.len()
         );
-        return Ok(());
+        // fall through to the normal apply loop — un-imported migrations
+        // (V0009 and later when upgrading from refinery v4) will run.
+    }
+
+    // v5.5 self-heal: if previous versions of `apply_migrations` ran the
+    // buggy "mark-all-as-applied" path, downstream migrations got
+    // recorded but never executed. Force re-apply of `V0009__account_platform.sql`
+    // when the DB still has the v4 accounts schema (no `platform_id`
+    // column). Idempotent in the healthy case.
+    #[cfg(not(feature = "postgres"))]
+    {
+        let has_platform_id: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name='platform_id'",
+        )
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| DbError::Migration(format!("self-heal probe: {e}")))?;
+        let has_col = has_platform_id.map(|r| r.0).unwrap_or(0) > 0;
+        if !has_col {
+            tracing::warn!(
+                "accounts.platform_id missing — self-healing legacy v4→v5 migration gap"
+            );
+            // Wipe the bogus _sqlx_migrations entry so the normal apply
+            // loop below re-runs the DDL.
+            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+                .bind("V0009__account_platform.sql")
+                .execute(pool)
+                .await
+                .map_err(|e| {
+                    DbError::Migration(format!("self-heal delete: {e}"))
+                })?;
+        }
     }
 
     for (name, sql) in MIGRATION_FILES {
@@ -240,6 +299,16 @@ pub async fn apply_migrations(pool: &AsyncDbPool) -> Result<(), DbError> {
             .map_err(|e| DbError::Migration(format!("record {name}: {e}")))?;
     }
     Ok(())
+}
+
+/// Parse `V0009__account_platform.sql` → (9, "account_platform"). Returns
+/// `None` if the filename doesn't match the `V<digits>__<stem>.sql` convention.
+fn parse_v_filename(name: &str) -> Option<(i64, &str)> {
+    let stripped = name.strip_prefix('V')?;
+    let (digits, rest) = stripped.split_once("__")?;
+    let stem = rest.strip_suffix(".sql")?;
+    let version = digits.parse::<i64>().ok()?;
+    Some((version, stem))
 }
 
 /// v5.3: 把 SQLite-dialect 的 DDL 转换成当前 backend 能吃的 SQL。
