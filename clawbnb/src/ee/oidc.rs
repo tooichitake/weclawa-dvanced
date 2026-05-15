@@ -72,6 +72,9 @@ pub struct OidcConfig {
     pub authorization_endpoint: String,
     /// token_endpoint — 同上。
     pub token_endpoint: String,
+    /// jwks_uri — `<issuer>/.well-known/jwks.json` 通常即此。v7.2 加，
+    /// `crate::ee::jwks::verify_id_token` 需要。
+    pub jwks_uri: String,
 }
 
 fn default_scopes() -> Vec<String> {
@@ -88,6 +91,9 @@ impl OidcConfig {
         }
         if !self.token_endpoint.starts_with("https://") {
             return Err("token_endpoint must be https://".into());
+        }
+        if !self.jwks_uri.starts_with("https://") {
+            return Err("jwks_uri must be https://".into());
         }
         if !self.redirect_uri.starts_with("https://")
             && !self.redirect_uri.starts_with("http://localhost")
@@ -190,6 +196,7 @@ mod tests {
             scopes: vec!["openid".into(), "email".into()],
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".into(),
             token_endpoint: "https://oauth2.googleapis.com/token".into(),
+            jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".into(),
         }
     }
 

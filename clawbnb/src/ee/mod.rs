@@ -28,6 +28,7 @@ pub mod audit_archiver;
 pub mod audit_retention;
 pub mod audit_scheduler;
 pub mod jwks;
+pub mod saml_dsig;
 pub mod oidc;
 pub mod oidc_callback;
 pub mod saml;

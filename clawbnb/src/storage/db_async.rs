@@ -176,6 +176,10 @@ const MIGRATION_FILES: &[(&str, &str)] = &[
         "V0012__timestamptz.sql",
         include_str!("migrations/V0012__timestamptz.sql"),
     ),
+    (
+        "V0013__tenant_sso_config.sql",
+        include_str!("migrations/V0013__tenant_sso_config.sql"),
+    ),
 ];
 
 // --- Process-global async pool handle --------------------------------------

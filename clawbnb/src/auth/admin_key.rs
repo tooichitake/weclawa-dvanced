@@ -61,15 +61,32 @@ pub struct MintedKey {
     pub record: AdminKeyRecord,
 }
 
-/// Async mint — `Sqlx*Repo` 版本。argon2 hash 是 CPU bound，包在
-/// `spawn_blocking` 里。
+/// Async mint into the default tenant. Convenience wrapper around
+/// [`mint_new_key_for_tenant_async`] — used by bootstrap, admin GUI's
+/// "Create key" button, and tests, all of which operate in the
+/// single-operator default tenant.
 pub async fn mint_new_key_async(
     pool: crate::storage::db_async::AsyncDbPool,
     name: &str,
     role: Role,
 ) -> Result<MintedKey, String> {
+    mint_new_key_for_tenant_async(pool, name, role, crate::tenancy::DEFAULT_TENANT).await
+}
+
+/// Async mint scoped to an explicit tenant. v7.2: used by SSO JIT
+/// provisioning — the OIDC/SAML callback knows the tenant from the
+/// SsoConfig used to authenticate and mints a key inside that tenant.
+///
+/// argon2 hash is CPU bound, wrapped in `spawn_blocking`.
+pub async fn mint_new_key_for_tenant_async(
+    pool: crate::storage::db_async::AsyncDbPool,
+    name: &str,
+    role: Role,
+    tenant_id: &str,
+) -> Result<MintedKey, String> {
     use chrono::Utc;
     let name = name.to_string();
+    let tenant_id = tenant_id.to_string();
     let mint_inner = tokio::task::spawn_blocking(move || {
         let mut secret_bytes = [0u8; 32];
         rand::rngs::OsRng
@@ -91,7 +108,7 @@ pub async fn mint_new_key_async(
             created_at: now,
             last_used_at: None,
             revoked_at: None,
-            tenant_id: crate::tenancy::DEFAULT_TENANT.to_string(),
+            tenant_id,
         };
         Ok::<_, String>(MintedKey { plaintext, record })
     })

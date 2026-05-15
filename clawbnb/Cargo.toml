@@ -34,7 +34,7 @@ discord-gateway = ["dep:tokio-tungstenite", "dep:futures"]
 # 默认 off，hosted SaaS 部署时 `--features ee` 编进 binary。Open-source
 # 用户使用核心功能不受影响。当前 ee 子模块只搭骨架（无实际 SSO 实现），
 # v3 PR 增量补全。
-ee = ["dep:jsonwebtoken", "dep:rsa", "dep:x509-parser"]
+ee = ["dep:jsonwebtoken", "dep:rsa", "dep:x509-parser", "dep:quick-xml"]
 
 # v3 OpenTelemetry — distributed tracing via OTLP exporter (default to
 # stdout in dev, configurable endpoint in prod). 多租户 SaaS 跨 service
@@ -166,6 +166,12 @@ jsonwebtoken = { version = "9", optional = true }
 # remaining gap — see `ee::saml` docstring for SP-proxy production guidance.
 rsa = { version = "0.9", optional = true, features = ["sha2"] }
 x509-parser = { version = "0.16", optional = true }
+
+# v7.2 — SAML XML-DSig 用，限定 profile (exclusive C14N + enveloped-signature
+# + rsa-sha256) 自己实现 verify。`quick-xml` 是 Rust 主流 XML 流式 parser
+# (3M+/mo)，XXE-safe by default（不解析 DTD entities）。我们不依赖任何
+# DOM 形态 — 全程 SAX 事件流，避免 entity expansion 攻击 + 内存爆。
+quick-xml = { version = "0.36", optional = true }
 
 # v5.2 O3 — Discord Gateway WebSocket. tokio-tungstenite 是 tungstenite
 # 的 tokio async wrapper，rustls-tls 让 binary 不依赖系统 OpenSSL。

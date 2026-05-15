@@ -97,6 +97,55 @@ impl SqlxTenantRepo {
         .await
         .map_err(|e| DbError::Pool(format!("sqlx find_by_customer: {e}")))
     }
+
+    /// v7.2: return per-tenant SSO config as raw JSONB values (caller
+    /// deserializes into `OidcConfig` / `SamlConfig`). NULL → None.
+    /// Both columns may be NULL (tenant uses only admin_key auth) or
+    /// either-or (only OIDC, only SAML, or both configured).
+    pub async fn get_sso_config(
+        &self,
+        id: &TenantId,
+    ) -> Result<Option<(Option<serde_json::Value>, Option<serde_json::Value>)>, DbError> {
+        let row: Option<(Option<serde_json::Value>, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT oidc_config_json, saml_config_json FROM tenants WHERE id = $1",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DbError::Pool(format!("sqlx get_sso_config: {e}")))?;
+        Ok(row)
+    }
+
+    /// v7.2: write OIDC config (pass `None` to clear). Wrapper around an
+    /// UPDATE; returns whether the tenant row exists (rows_affected > 0).
+    pub async fn set_oidc_config(
+        &self,
+        id: &TenantId,
+        config: Option<&serde_json::Value>,
+    ) -> Result<bool, DbError> {
+        let res = sqlx::query("UPDATE tenants SET oidc_config_json = $1 WHERE id = $2")
+            .bind(config)
+            .bind(id.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DbError::Pool(format!("sqlx set_oidc_config: {e}")))?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// v7.2: write SAML config (pass `None` to clear).
+    pub async fn set_saml_config(
+        &self,
+        id: &TenantId,
+        config: Option<&serde_json::Value>,
+    ) -> Result<bool, DbError> {
+        let res = sqlx::query("UPDATE tenants SET saml_config_json = $1 WHERE id = $2")
+            .bind(config)
+            .bind(id.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DbError::Pool(format!("sqlx set_saml_config: {e}")))?;
+        Ok(res.rows_affected() > 0)
+    }
 }
 
 #[cfg(test)]

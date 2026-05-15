@@ -2,8 +2,8 @@
 //!
 //! ## 为什么需要
 //!
-//! [`crate::ee::oidc_callback::decode_id_token_unverified`] 显式不验签 ——
-//! 注释里标了"生产部署前必须做"。本模块补齐：
+//! OIDC callback 必须验证 id_token 签名才能信任 IdP 主张的身份。本模块
+//! 提供：
 //!
 //! 1. `fetch_jwks(jwks_uri)` — 从 IdP 拉 `/.well-known/jwks.json`
 //! 2. `JwksCache` — 全局 OnceLock<RwLock> 缓存（TTL 1h），避免每次 login 都拉
@@ -259,8 +259,9 @@ mod tests {
     }
 
     /// verify_id_token 的解码部分独立可测 — 用 mock kid → DecodingKey
-    /// 在 CI 跑 sign+verify round-trip 需要私钥；那块通过
-    /// `decode_id_token_unverified` test 间接覆盖了。这里只验：
+    /// 在 CI 跑 sign+verify round-trip 需要私钥；该 round-trip 用
+    /// `jsonwebtoken` 自家 encode/decode 互测覆盖（v7.2+ 计划补充）。
+    /// 这里只验：
     /// 1. malformed header → BadRequest
     /// 2. unsupported alg → BadRequest
     #[tokio::test]
@@ -275,6 +276,7 @@ mod tests {
             scopes: vec!["openid".into()],
             authorization_endpoint: "https://x".into(),
             token_endpoint: "https://x".into(),
+            jwks_uri: "https://x.example/jwks".into(),
         };
         // Generate a token with HS256 header for the negative test.
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;

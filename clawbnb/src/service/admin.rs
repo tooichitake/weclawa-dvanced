@@ -362,6 +362,123 @@ pub async fn trigger_backup(req: Request) -> Result<Json<Value>, (StatusCode, Js
     })))
 }
 
+// v7.2: per-tenant SSO config GET/PUT. super_admin only because SSO
+// config writes effectively grant login access to anyone the IdP says
+// is a valid user. Audit-logged on every change.
+#[cfg(feature = "ee")]
+pub async fn get_tenant_sso_config(
+    Path(id): Path<String>,
+    req: Request,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let ctx = req
+        .extensions()
+        .get::<AdminContext>()
+        .ok_or((StatusCode::UNAUTHORIZED, Json(json!({"error": "no auth"}))))?
+        .clone();
+    require(&ctx, Role::SuperAdmin)?;
+
+    let pool = match db_async::try_global_async_pool() {
+        Some(p) => p,
+        None => return Err(internal_str("DB pool not initialized")),
+    };
+    let repo = crate::repo::tenants_async::SqlxTenantRepo::new(pool);
+    let tenant = crate::tenancy::TenantId::new(&id);
+    let row = repo
+        .get_sso_config(&tenant)
+        .await
+        .map_err(|e| internal_str(format!("get_sso_config: {e}")))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "tenant not found"}))))?;
+    Ok(Json(json!({
+        "tenant": tenant.as_str(),
+        "oidc": row.0,
+        "saml": row.1,
+    })))
+}
+
+#[cfg(feature = "ee")]
+#[derive(Deserialize)]
+pub struct TenantSsoConfigPut {
+    /// OIDC config (set to null to clear)
+    #[serde(default)]
+    pub oidc: Option<Value>,
+    /// SAML config (set to null to clear)
+    #[serde(default)]
+    pub saml: Option<Value>,
+}
+
+#[cfg(feature = "ee")]
+pub async fn put_tenant_sso_config(
+    Path(id): Path<String>,
+    req: Request,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let ctx = req
+        .extensions()
+        .get::<AdminContext>()
+        .ok_or((StatusCode::UNAUTHORIZED, Json(json!({"error": "no auth"}))))?
+        .clone();
+    require(&ctx, Role::SuperAdmin)?;
+
+    // Read body (axum extractors don't compose well with Request — pull
+    // it manually).
+    let body = axum::body::to_bytes(req.into_body(), 64 * 1024)
+        .await
+        .map_err(|e| bad_request(&format!("body: {e}")))?;
+    let body: TenantSsoConfigPut = serde_json::from_slice(&body)
+        .map_err(|e| bad_request(&format!("json: {e}")))?;
+
+    // Validate before writing — refuse to persist a config that the
+    // verify path would later reject (better DX).
+    if let Some(oidc) = &body.oidc {
+        let parsed: crate::ee::oidc::OidcConfig = serde_json::from_value(oidc.clone())
+            .map_err(|e| bad_request(&format!("oidc shape: {e}")))?;
+        parsed
+            .validate()
+            .map_err(|e| bad_request(&format!("oidc validate: {e}")))?;
+    }
+    if let Some(saml) = &body.saml {
+        let parsed: crate::ee::saml::SamlConfig = serde_json::from_value(saml.clone())
+            .map_err(|e| bad_request(&format!("saml shape: {e}")))?;
+        parsed
+            .validate()
+            .map_err(|e| bad_request(&format!("saml validate: {e}")))?;
+    }
+
+    let pool = match db_async::try_global_async_pool() {
+        Some(p) => p,
+        None => return Err(internal_str("DB pool not initialized")),
+    };
+    let repo = crate::repo::tenants_async::SqlxTenantRepo::new(pool.clone());
+    let tenant = crate::tenancy::TenantId::new(&id);
+    if let Some(_oidc) = &body.oidc {
+        repo.set_oidc_config(&tenant, body.oidc.as_ref())
+            .await
+            .map_err(|e| internal_str(format!("set_oidc_config: {e}")))?;
+    }
+    if let Some(_saml) = &body.saml {
+        repo.set_saml_config(&tenant, body.saml.as_ref())
+            .await
+            .map_err(|e| internal_str(format!("set_saml_config: {e}")))?;
+    }
+    // Audit: the JSON bodies may contain secrets (OIDC client_secret),
+    // so we redact `after` to just "{set/cleared}".
+    let after_summary = json!({
+        "oidc_set": body.oidc.is_some(),
+        "saml_set": body.saml.is_some(),
+    });
+    let audit = SqlxAuditRepo::new(pool);
+    let _ = audit
+        .record(AuditInput {
+            actor_key_id: Some(&ctx.key_id),
+            action: "admin.tenants.sso_config.put",
+            target: Some(tenant.as_str()),
+            before: None,
+            after: Some(&after_summary),
+            ip: None,
+        })
+        .await;
+    Ok(Json(json!({"ok": true, "tenant": tenant.as_str()})))
+}
+
 // --- helpers --------------------------------------------------------------
 
 fn bad_request(detail: &str) -> (StatusCode, Json<Value>) {

@@ -171,28 +171,53 @@ ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST">\
 /// - **Encrypted assertions**：极少 IdP 用，留 v6
 /// - **SLO (Single Log-Out)**：跨 IdP 注销，留 v6
 ///
-/// 当前 verify 提供**初步信任** —— 验证签名能区分 "完全伪造" vs
-/// "IdP 真发的"，但对**重放/部分修改**防御较弱。SP-side proxy 部署
-/// 是首选生产姿势。
+/// v7.2: full SAML 2.0 SP-receiver verify via
+/// [`crate::ee::saml_dsig::verify_saml_response`].
+///
+/// **This is the production-safe entry point.** It enforces the strict
+/// IdP profile (rsa-sha256 + exc-c14n + enveloped-signature + single
+/// Reference), checks the digest covers the trusted assertion, verifies
+/// the RSA signature, and validates audience + time conditions +
+/// optional InResponseTo. Returns extracted [`SamlAssertion`] on
+/// success.
+///
+/// Pass `expected_in_response_to=Some(req_id)` for SP-initiated flows
+/// (we issued an AuthnRequest), `None` for IdP-initiated (unsolicited).
 pub fn verify_saml_response_basic(
     cfg: &SamlConfig,
     saml_response_xml: &str,
 ) -> Result<SamlAssertion, WeclawError> {
-    // Step 1: parse XML structure (find signed_info + signature_value + name_id)
-    let parts = parse_saml_response(saml_response_xml)?;
+    verify_saml_response_full(cfg, saml_response_xml, None)
+}
 
-    // Step 2: verify signature
-    verify_signature_rsa_sha256(
-        &parts.signed_info_xml,
-        &parts.signature_b64,
+/// Full SP-receiver verify with optional InResponseTo binding.
+pub fn verify_saml_response_full(
+    cfg: &SamlConfig,
+    saml_response_xml: &str,
+    expected_in_response_to: Option<&str>,
+) -> Result<SamlAssertion, WeclawError> {
+    use crate::ee::saml_dsig::{verify_saml_response, SamlError};
+    let verified = verify_saml_response(
+        saml_response_xml,
         &cfg.idp_x509_cert_pem,
-    )?;
-
-    // Step 3: extract assertion
+        &cfg.sp_entity_id,
+        expected_in_response_to,
+    )
+    .map_err(|e: SamlError| match e {
+        SamlError::Profile(m) => WeclawError::BadRequest(format!("saml profile: {m}")),
+        SamlError::Missing(m) => WeclawError::BadRequest(format!("saml missing: {m}")),
+        SamlError::Parse(m) => WeclawError::BadRequest(format!("saml parse: {m}")),
+        SamlError::Canonicalization(m) => {
+            WeclawError::BadRequest(format!("saml c14n: {m}"))
+        }
+        SamlError::Digest(m) => WeclawError::BadRequest(format!("saml digest: {m}")),
+        SamlError::Signature(m) => WeclawError::BadRequest(format!("saml signature: {m}")),
+        SamlError::Cert(m) => WeclawError::Internal(format!("saml cert: {m}")),
+    })?;
     Ok(SamlAssertion {
-        subject: parts.name_id,
-        email: parts.attributes.get("email").cloned(),
-        display_name: parts.attributes.get("displayName").cloned(),
+        subject: verified.subject_name_id,
+        email: verified.attributes.get("email").cloned(),
+        display_name: verified.attributes.get("displayName").cloned(),
     })
 }
 
@@ -204,179 +229,18 @@ pub struct SamlAssertion {
     pub display_name: Option<String>,
 }
 
-struct SamlResponseParts {
-    signed_info_xml: String,
-    signature_b64: String,
-    name_id: String,
-    attributes: std::collections::HashMap<String, String>,
-}
+// v7.2: `parse_saml_response` + `extract_between` removed. They were
+// substring-based extractors only safe to extract *anything* if you
+// also did c14n + digest verify (which they didn't). All callers go
+// through `crate::ee::saml_dsig::verify_saml_response` which parses
+// via quick-xml, canonicalizes per W3C exc-c14n, and rejects
+// non-canonical IdP profiles loudly.
 
-fn parse_saml_response(xml: &str) -> Result<SamlResponseParts, WeclawError> {
-    // 基础正则抽取 (v5.1 简化版)。生产用 xml-rs / quick-xml 真 parser，
-    // 但本期实施重点是接口形态，详细 SAX 解析留 v5.2。
-    let signed_info_xml = extract_between(xml, "<ds:SignedInfo", "</ds:SignedInfo>")
-        .ok_or_else(|| WeclawError::BadRequest("SAMLResponse missing <ds:SignedInfo>".into()))?;
-    // 把 "<ds:SignedInfo>" 整 tag 包回去（不光是中间内容）
-    let signed_info_xml = format!("<ds:SignedInfo{}</ds:SignedInfo>", signed_info_xml);
-
-    let signature_b64 = extract_between(xml, "<ds:SignatureValue>", "</ds:SignatureValue>")
-        .ok_or_else(|| {
-            WeclawError::BadRequest("SAMLResponse missing <ds:SignatureValue>".into())
-        })?
-        .trim()
-        .replace(&['\n', '\r', ' ', '\t'][..], "");
-
-    let name_id = extract_between(xml, "<saml:NameID", "</saml:NameID>")
-        .or_else(|| extract_between(xml, "<NameID", "</NameID>"))
-        .map(|s| {
-            // 去掉 attributes 部分（"Format=...">subject"）
-            s.split('>').nth(1).unwrap_or("").trim().to_string()
-        })
-        .ok_or_else(|| WeclawError::BadRequest("SAMLResponse missing <NameID>".into()))?;
-
-    // Attributes (简化 ── 仅按属性名取 string value，多值/复杂结构留后期)
-    let mut attributes = std::collections::HashMap::new();
-    for name in ["email", "displayName", "name"] {
-        let pat_start = format!("AttributeName=\"{name}\"");
-        if let Some(pos) = xml.find(&pat_start) {
-            if let Some(after_value) = xml[pos..].find("<AttributeValue>") {
-                let val_start = pos + after_value + "<AttributeValue>".len();
-                if let Some(val_end) = xml[val_start..].find("</AttributeValue>") {
-                    attributes.insert(
-                        name.to_string(),
-                        xml[val_start..val_start + val_end].trim().to_string(),
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(SamlResponseParts {
-        signed_info_xml,
-        signature_b64,
-        name_id,
-        attributes,
-    })
-}
-
-fn extract_between(s: &str, start: &str, end: &str) -> Option<String> {
-    let i = s.find(start)?;
-    let s = &s[i + start.len()..];
-    let j = s.find(end)?;
-    Some(s[..j].to_string())
-}
-
-/// v5.4: real RSA-PKCS#1 v1.5 SHA-256 verify on the SignedInfo bytes
-/// against the IdP X.509 cert's RSA public key.
-///
-/// ## What this does
-///
-/// 1. PEM → DER → X.509 → RSA public key (via `x509-parser` + `rsa`)
-/// 2. base64 → raw signature bytes
-/// 3. `verifying_key.verify(signed_info_bytes, &signature)` → reject if not
-///    signed by the IdP's private key counterpart
-///
-/// ## What this does NOT do (production gap — see SP-proxy guidance)
-///
-/// - **Exclusive XML Canonicalization (c14n) per W3C 2008 spec.** The
-///   IdP signs the *canonicalized* `<ds:SignedInfo>` bytes; we sign the
-///   raw extracted substring. Attackers who can inject whitespace /
-///   reorder attributes / play with namespace prefixes may bypass
-///   verification. **Production deployments should put weclawbot behind
-///   `mod_auth_mellon` or `shibboleth-sp` which do canonical-form
-///   verification in C against libxmlsec1.**
-/// - X.509 chain validation. We trust the operator-configured leaf cert
-///   as the issuer; no CRL/OCSP/intermediate-CA walk.
-/// - Algorithm flexibility. Only RSA-SHA256 — modern IdPs (Okta/Azure
-///   AD/AD FS) all default to this; RSA-SHA1 explicitly rejected as
-///   deprecated.
-#[cfg(feature = "ee")]
-fn verify_signature_rsa_sha256(
-    signed_info: &str,
-    signature_b64: &str,
-    cert_pem: &str,
-) -> Result<(), WeclawError> {
-    use base64::{engine::general_purpose, Engine as _};
-    use rsa::pkcs1v15::{Signature, VerifyingKey};
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::sha2::Sha256;
-    use rsa::signature::Verifier;
-    use rsa::RsaPublicKey;
-
-    if signed_info.is_empty() {
-        return Err(WeclawError::BadRequest("signed_info empty".into()));
-    }
-
-    // Step 1: decode signature b64 → bytes
-    let sig_bytes = general_purpose::STANDARD
-        .decode(signature_b64.as_bytes())
-        .map_err(|e| WeclawError::BadRequest(format!("signature base64: {e}")))?;
-    if sig_bytes.len() < 128 {
-        return Err(WeclawError::BadRequest(format!(
-            "signature too short ({} bytes) — RSA-2048+ expects ≥256",
-            sig_bytes.len()
-        )));
-    }
-
-    // Step 2: parse PEM cert → DER → extract SubjectPublicKeyInfo (SPKI)
-    if !cert_pem.contains("BEGIN CERTIFICATE") {
-        return Err(WeclawError::BadRequest(
-            "IdP cert PEM missing BEGIN CERTIFICATE marker".into(),
-        ));
-    }
-    let pem_blocks = x509_parser::pem::Pem::iter_from_buffer(cert_pem.as_bytes())
-        .next()
-        .ok_or_else(|| WeclawError::BadRequest("IdP cert: no PEM block".into()))?
-        .map_err(|e| WeclawError::BadRequest(format!("IdP cert PEM parse: {e}")))?;
-    let cert = pem_blocks
-        .parse_x509()
-        .map_err(|e| WeclawError::BadRequest(format!("IdP cert X.509 parse: {e}")))?;
-
-    // Step 3: SPKI DER → RsaPublicKey (rsa crate accepts PKCS#8 DER which
-    // is identical to the SPKI form X.509 carries).
-    let spki_der = cert.public_key().raw;
-    let rsa_pubkey = RsaPublicKey::from_public_key_der(spki_der).map_err(|e| {
-        WeclawError::BadRequest(format!(
-            "IdP cert pubkey not RSA (DER decode failed): {e}"
-        ))
-    })?;
-
-    // Step 4: verify signature
-    let verifying_key = VerifyingKey::<Sha256>::new(rsa_pubkey);
-    let signature = Signature::try_from(sig_bytes.as_slice())
-        .map_err(|e| WeclawError::BadRequest(format!("signature byte length: {e}")))?;
-    verifying_key
-        .verify(signed_info.as_bytes(), &signature)
-        .map_err(|e| {
-            WeclawError::BadRequest(format!(
-                "SAMLResponse signature verify failed: {e} — \
-                 possible forgery or wrong IdP cert"
-            ))
-        })?;
-
-    tracing::debug!(
-        "SAML signature verify: RSA-PKCS#1 v1.5 SHA-256 passed \
-         (bytes={}, signed_info_len={}). \
-         Note: c14n is NOT yet applied — production should use SP-proxy.",
-        sig_bytes.len(),
-        signed_info.len()
-    );
-    Ok(())
-}
-
-/// Non-ee build: no SAML verify dependencies linked. Reject everything.
-/// SAML routes are themselves gated on `cfg(feature = "ee")`, so this
-/// shim is only here to keep `verify_saml_response_basic` compilable.
-#[cfg(not(feature = "ee"))]
-fn verify_signature_rsa_sha256(
-    _signed_info: &str,
-    _signature_b64: &str,
-    _cert_pem: &str,
-) -> Result<(), WeclawError> {
-    Err(WeclawError::Internal(
-        "SAML verify requires --features ee (rsa + x509-parser crates)".into(),
-    ))
-}
+// v7.2: `verify_signature_rsa_sha256` (both feature-gated variants)
+// removed. The RSA verify lives in `crate::ee::saml_dsig` now, where
+// it's called after exc-c14n on the SignedInfo bytes — that's the
+// only safe order. The old standalone signed-substring verify was
+// vulnerable to whitespace mutation and namespace-prefix attacks.
 
 /// XML 字符串字面 escape — & < > " 转实体。
 fn xml_escape(s: &str) -> String {
@@ -446,49 +310,49 @@ mod tests {
     }
 
     #[test]
-    fn verify_response_rejects_malformed() {
+    fn verify_response_rejects_no_signature() {
         let cfg = sample_cfg();
-        // No signature → rejected
         let r = verify_saml_response_basic(&cfg, "<samlp:Response/>");
         assert!(r.is_err());
-        // Empty short signature → rejected
-        let xml = "<ds:SignedInfo>abc</ds:SignedInfo><ds:SignatureValue>YWJj</ds:SignatureValue><saml:NameID>x</saml:NameID>";
-        let r = verify_saml_response_basic(&cfg, xml);
-        assert!(r.is_err()); // sig 太短
     }
 
     #[test]
-    fn verify_response_rejects_fake_cert() {
-        // v5.4: real RSA verify now in place — fake cert content (MOCK
-        // placeholder) is correctly rejected. Previous test asserted
-        // extraction succeeded with stub cert; that's no longer the
-        // right contract.
+    fn verify_response_rejects_non_canonical_profile() {
+        // SAMLResponse with SignatureMethod = rsa-sha1 (deprecated) →
+        // strict profile reject before we get anywhere near cert verify.
         let cfg = sample_cfg();
-        let sig = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 256]);
-        let xml = format!(
-            "<ds:SignedInfo>placeholder</ds:SignedInfo>\
-             <ds:SignatureValue>{}</ds:SignatureValue>\
-             <saml:NameID Format=\"...\">alice@example.com</saml:NameID>",
-            sig
-        );
-        let r = verify_saml_response_basic(&cfg, &xml);
+        let xml = r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="r1">
+  <ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+    <ds:SignedInfo>
+      <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+      <ds:SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>
+      <ds:Reference URI="#r1">
+        <ds:Transforms>
+          <ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+          <ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+        </ds:Transforms>
+        <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+        <ds:DigestValue>abc</ds:DigestValue>
+      </ds:Reference>
+    </ds:SignedInfo>
+    <ds:SignatureValue>def</ds:SignatureValue>
+  </ds:Signature>
+</samlp:Response>"##;
+        let r = verify_saml_response_basic(&cfg, xml);
+        let err = r.unwrap_err().to_string();
         assert!(
-            r.is_err(),
-            "fake cert (MOCK PEM body) must fail X.509 parse / RSA verify"
+            err.contains("SignatureMethod must be"),
+            "expected rsa-sha1 to be rejected; got: {err}"
         );
     }
 
     #[test]
-    fn parse_extracts_name_id_independent_of_verify() {
-        // Structural parsing should succeed even when signature verify
-        // would fail downstream — confirms the path stages are
-        // independent (so observability can show "parsed OK but verify
-        // failed" in audit logs).
-        let xml = "<ds:SignedInfo>x</ds:SignedInfo>\
-                   <ds:SignatureValue>YWJj</ds:SignatureValue>\
-                   <saml:NameID Format=\"f\">alice@example.com</saml:NameID>";
-        let parts = parse_saml_response(xml).unwrap();
-        assert_eq!(parts.name_id, "alice@example.com");
+    fn verify_response_rejects_xxe_doctype() {
+        let cfg = sample_cfg();
+        let xml = "<!DOCTYPE foo SYSTEM 'file:///etc/passwd'><samlp:Response/>";
+        let r = verify_saml_response_basic(&cfg, xml);
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("DOCTYPE"), "expected XXE reject; got: {err}");
     }
 
     #[test]

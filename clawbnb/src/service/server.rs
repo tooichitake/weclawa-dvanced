@@ -87,7 +87,7 @@ const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// `/api/v1/*` (canonical) and once at `/api/*` (back-compat shim that
 /// goes away after one release).
 fn protected_routes() -> Router {
-    Router::new()
+    let r = Router::new()
         .route("/accounts", get(routes::get_accounts))
         .route("/accounts/{id}/relogin", post(routes::post_relogin))
         .route("/accounts/link-agent", post(routes::post_link_agent))
@@ -129,8 +129,19 @@ fn protected_routes() -> Router {
         .route("/config", get(super::sysconfig::get_config))
         .route("/config", put(super::sysconfig::put_config))
         .route("/logs", get(super::sysconfig::get_logs))
-        .route("/sandboxes", get(super::sysconfig::get_sandboxes))
-        .layer(middleware::from_fn(bearer_auth))
+        .route("/sandboxes", get(super::sysconfig::get_sandboxes));
+
+    // v7.2: per-tenant SSO config management (super_admin only,
+    // enforced inside the handler).
+    #[cfg(feature = "ee")]
+    let r = r
+        .route(
+            "/admin/tenants/{id}/sso",
+            get(super::admin::get_tenant_sso_config)
+                .put(super::admin::put_tenant_sso_config),
+        );
+
+    r.layer(middleware::from_fn(bearer_auth))
 }
 
 pub async fn run_server(bind: String, port: u16) -> Result<(), String> {
@@ -156,7 +167,13 @@ pub async fn run_server(bind: String, port: u16) -> Result<(), String> {
         .route(
             "/api/v1/puppet/feishu/webhook/{account_id}",
             post(super::feishu_webhook::post_feishu_webhook),
-        )
+        );
+    // v7.2: SSO router — public init/callback for OIDC + SAML.
+    // Feature-gated since the verify primitives live under `ee`.
+    // Nested as a Router so the prefix `/api/v1/auth/sso` is set once.
+    #[cfg(feature = "ee")]
+    let app = app.nest("/api/v1/auth/sso", super::sso::sso_routes());
+    let app = app
         // Versioned + back-compat aliased API surfaces. Both go through
         // the same protected subtree — old clients keep working while
         // the GUI migrates to /api/v1/*.

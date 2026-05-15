@@ -121,6 +121,35 @@ pub fn encrypt(plaintext: &[u8]) -> Result<(Vec<u8>, [u8; NONCE_LEN]), String> {
     Ok((ct, nonce_bytes))
 }
 
+/// Derive a fixed-length subkey from the master key for a specific
+/// purpose. Different `label` strings produce different keys, so the
+/// SSO-session HMAC key, the (future) backup-encryption key, etc. are
+/// cryptographically separated from the AES-GCM token-at-rest key.
+///
+/// Implementation: HMAC-SHA256(master, label) → 32 bytes. This is the
+/// HKDF "expand" step with a fixed length output, no salt. Plenty for
+/// short-lived purposes like cookie signing where we just need
+/// "different label = different bytes, attacker can't compute from
+/// either key to the other".
+///
+/// `label` should be a stable string with a version tag, e.g.
+/// `"sso-session-v1"`. If the cookie format ever changes incompatibly,
+/// bump to `"sso-session-v2"` to invalidate all live cookies.
+pub fn derive_subkey(label: &str) -> Result<[u8; KEY_LEN], String> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let master = ensure_master_key()?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(master)
+        .map_err(|e| format!("hmac init: {e}"))?;
+    mac.update(label.as_bytes());
+    let digest = mac.finalize().into_bytes();
+    // Sha256 output is exactly 32 bytes which is exactly KEY_LEN.
+    let mut out = [0u8; KEY_LEN];
+    out.copy_from_slice(&digest);
+    Ok(out)
+}
+
 /// Decrypt `(ciphertext, nonce)` under the master key.
 pub fn decrypt(ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Vec<u8>, String> {
     if nonce_bytes.len() != NONCE_LEN {
