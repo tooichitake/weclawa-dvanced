@@ -1,0 +1,106 @@
+# Default values for weclawbot Helm chart.
+# k8s-deployable peripherals only — weclawbot daemon itself runs on bare-
+# metal/VM host (sandbox tier requires non-containerized podman+runsc).
+
+# ---------------------------------------------------------------------------
+# weclawbot daemon — k8s deployment (EXPERIMENTAL)
+# ---------------------------------------------------------------------------
+# To run weclawbot inside the cluster, the Pod needs:
+#   - privileged: true (for podman-in-pod + gVisor)
+#   - hostPath volume for /sys/fs/cgroup
+#   - capabilities: SYS_ADMIN (for unshare)
+#
+# Most prod deployments instead run weclawbot as a systemd service on a
+# dedicated Linux VM. The k8s Pod path is for dev/staging tinkering.
+daemon:
+  enabled: false
+  image:
+    repository: ghcr.io/tooichitake/weclawbot
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicas: 1  # weclawbot has process-global state, do NOT scale horizontally
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "4"  # claude spawn can burst
+      memory: "8Gi"  # 2GB per sandbox * 4 concurrent + overhead
+  service:
+    type: ClusterIP
+    port: 18011
+  ingress:
+    enabled: false
+    className: nginx
+    hosts:
+      - host: weclawbot.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: weclawbot-tls
+        hosts:
+          - weclawbot.example.com
+
+  # Compliance mode env override — daemon reads via config.json but also
+  # honors WECLAWBOT_COMPLIANCE_MODE env at boot. Valid: permissive |
+  # standard | strict | hipaa | soc2 | gdpr.
+  complianceMode: standard
+
+  # Encryption key for the token-at-rest crate (AES-GCM). Pulled from a
+  # k8s Secret in prod; values.yaml fallback for dev only.
+  envFrom:
+    - secretRef:
+        name: weclawbot-secrets  # must contain WECLAWBOT_DB_KEY, WECLAWBOT_PG_URL
+
+# ---------------------------------------------------------------------------
+# Postgres backend (subchart bitnami/postgresql).
+# Set postgresql.enabled=true and daemon.envFrom.WECLAWBOT_PG_URL =
+# "postgres://weclawbot:<pw>@<release>-postgresql:5432/weclawbot".
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  auth:
+    username: weclawbot
+    database: weclawbot
+    # password is via existingSecret in prod — see secrets section below.
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# ---------------------------------------------------------------------------
+# Prometheus + Grafana via kube-prometheus-stack
+# ---------------------------------------------------------------------------
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+
+# ---------------------------------------------------------------------------
+# OTel Collector (sidecar OR cluster-level — we deploy as a Deployment).
+# Receives weclawbot OTLP traces, exports to Tempo/Jaeger.
+# ---------------------------------------------------------------------------
+otelCollector:
+  enabled: false
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.111.0"
+  exporters:
+    tempo:
+      endpoint: ""  # set to Tempo gRPC ingress
+    jaeger:
+      endpoint: ""
+
+# ---------------------------------------------------------------------------
+# Secrets (DO NOT commit real values — use external secrets / sealed-secrets)
+# ---------------------------------------------------------------------------
+secrets:
+  # If managed externally, set existingSecret and skip create.
+  existingSecret: ""
+  create: true
+  data:
+    WECLAWBOT_DB_KEY: "REPLACE_ME_BASE64_32_BYTES"
+    WECLAWBOT_PG_URL: "postgres://weclawbot:REPLACE_ME@weclawbot-postgresql:5432/weclawbot"

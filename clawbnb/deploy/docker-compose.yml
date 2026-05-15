@@ -1,0 +1,84 @@
+# weclawbot self-host docker-compose stack — v5.5
+#
+# Quick-start: `docker compose up -d` then visit http://localhost:18011 and
+# paste the INITIAL-ADMIN-KEY printed in the daemon logs.
+#
+# NOTES:
+# - weclawbot itself runs OUTSIDE the container in the host (because it
+#   needs to spawn per-user podman+runsc containers; docker-in-docker for
+#   the sandbox tier is unsupported). This compose ONLY orchestrates the
+#   *peripheral* services: Postgres, Prometheus, Grafana, OTel Collector.
+# - For a fully-containerized topology suitable for k8s, see `./helm/`.
+
+services:
+
+  # Postgres backend for `--features postgres`. Optional — leave out if
+  # using bundled SQLite.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: weclawbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-weclawbot-change-me}
+      POSTGRES_DB: weclawbot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weclawbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Prometheus — scrapes weclawbot's /metrics on the host. Note: targets
+  # use host.docker.internal so prometheus running in a container can
+  # reach a daemon running on the host.
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    ports:
+      - "127.0.0.1:9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Grafana dashboards. Default admin is admin/admin — first login forces
+  # password change. Provision the Prometheus datasource via env.
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/prom.yml:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # OTel Collector — receives weclawbot's OTLP/gRPC traces (when daemon
+  # built with --features otel) and exports to Tempo/Jaeger/etc.
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:0.111.0
+  #   command: ["--config=/etc/otel/config.yaml"]
+  #   volumes:
+  #     - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+  #   ports:
+  #     - "127.0.0.1:4317:4317"  # OTLP gRPC
+  #     - "127.0.0.1:4318:4318"  # OTLP HTTP
+  #   restart: unless-stopped
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:

@@ -96,7 +96,27 @@ pub async fn dispatch(
     }
 
     // --- Payload (iLink-specific shim — uses WeixinMessage fields) ---
-    let redacted_text = crate::storage::pii::redact(&content.text).into_owned();
+    // v5.5: 优先走 ComplianceConfig 的 webhook_policy()（14 class 检测器
+    // + 模式 preset）。如果 strict/hipaa 模式下检出 BLOCK class，整条
+    // webhook 不发，返回 None 让 caller fallback 到下一 provider。
+    // 保留旧 `storage::pii::redact` 作 fallback 兜底（个别 tag 词替换）。
+    let pii_policy = crate::config::Config::cached().compliance.webhook_policy();
+    let scrub = crate::pii::scrub_with_policy(&content.text, &pii_policy);
+    if scrub.blocked {
+        warn!(
+            "[{account_id}] webhook payload BLOCKED by compliance policy: \
+             {} high-risk PII hit(s)",
+            scrub.hits.len()
+        );
+        metrics::counter!(
+            "weclawbot_webhook_calls_total",
+            "status" => "blocked_by_pii"
+        )
+        .increment(1);
+        return None;
+    }
+    let redacted_text =
+        crate::storage::pii::redact(&scrub.scrubbed).into_owned();
     let payload = serde_json::json!({
         "account_id": account_id,
         "platform_id": "ilink-wechat",
@@ -104,6 +124,11 @@ pub async fn dispatch(
         "text": redacted_text,
         "attachments": build_attachments_payload(account_id, msg.message_id.unwrap_or(0).to_string().as_str(), content),
         "message_id": msg.message_id,
+        // v5.5: surface which classes were detected so receivers can
+        // audit policy effectiveness. Class names only — no raw values.
+        "pii_classes_detected": scrub.hits.iter()
+            .map(|h| h.class.as_str())
+            .collect::<Vec<_>>(),
     });
     send_webhook(url, account_id, payload).await
 }
@@ -159,7 +184,24 @@ pub async fn dispatch_common(
         }
     }
 
-    let redacted_text = crate::storage::pii::redact(&content.text).into_owned();
+    // v5.5: ComplianceConfig PII policy on webhook outbound (multi-protocol path).
+    let pii_policy = crate::config::Config::cached().compliance.webhook_policy();
+    let scrub = crate::pii::scrub_with_policy(&content.text, &pii_policy);
+    if scrub.blocked {
+        warn!(
+            "[{}] webhook payload BLOCKED by compliance policy: {} high-risk PII hit(s)",
+            inbound.account_id,
+            scrub.hits.len()
+        );
+        metrics::counter!(
+            "weclawbot_webhook_calls_total",
+            "status" => "blocked_by_pii"
+        )
+        .increment(1);
+        return None;
+    }
+    let redacted_text =
+        crate::storage::pii::redact(&scrub.scrubbed).into_owned();
     let payload = serde_json::json!({
         "account_id": inbound.account_id,
         "tenant_id": inbound.tenant_id.as_str(),
@@ -168,6 +210,9 @@ pub async fn dispatch_common(
         "text": redacted_text,
         "attachments": build_attachments_payload(&inbound.account_id, &inbound.msg_id, content),
         "message_id": inbound.msg_id,
+        "pii_classes_detected": scrub.hits.iter()
+            .map(|h| h.class.as_str())
+            .collect::<Vec<_>>(),
     });
     send_webhook(url, &inbound.account_id, payload).await
 }

@@ -90,6 +90,18 @@ md-5 = "0.10"
 portable-pty = "0.9"
 vt100 = "0.16"
 regex = "1"
+# v5.5 PII pipeline — needs lookbehind/lookahead for "not preceded/followed
+# by digit" (regex crate refuses lookaround on principle). fancy-regex
+# (3M+ downloads/mo, fancy-regex/fancy-regex) supports them via Boyer-Moore
+# fallback. Pure Rust, no external deps.
+fancy-regex = "0.13"
+
+# v5.5 — Tenant export bundle (.tar.gz).
+# `tar` is the canonical Rust tar reader/writer (5M+ downloads/mo, pure
+# Rust). `flate2` is the de-facto gzip codec (12M+ downloads/mo). Both
+# work together via the GzEncoder wrapping a tar::Builder<File>.
+tar = "0.4"
+flate2 = "1"
 url = "2"
 
 # v4.2: SQLite-backed state via **sqlx only** (rusqlite/r2d2/refinery 都

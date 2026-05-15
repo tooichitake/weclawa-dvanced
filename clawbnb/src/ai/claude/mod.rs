@@ -86,14 +86,18 @@ async fn invoke_per_message(
         claude_args.push("--dangerously-skip-permissions");
     }
 
-    // v3-C4: tool policy 硬约束。从 user_settings 读 allowed/disallowed
-    // 列表，作为 CLI 参数加到 claude-cli。这层比 settings.json 更硬 —
-    // 即便用户篡改 settings.json，operator 配的 policy 仍然生效。
-    // 失败（DB 读不到等）= 没 policy = 跟之前行为一致。
+    // v5.5: tool policy 硬约束 + 信任分级 dynamic overlay。
+    // user_settings JSON 给基础 allowed/disallowed；trust tier 给"低信任
+    // 用户额外封死 Bash/Write/Edit/WebFetch/WebSearch" 的硬限制。两层
+    // 都作为 CLI flag 传 claude-cli，覆盖 sandbox 内 settings.json。
     let user_settings = crate::ai::history::user_settings_json(sandbox.user_hash.as_str())
         .await
         .unwrap_or_else(|| serde_json::json!({}));
-    let policy = crate::ai::tool_policy::ToolPolicy::from_settings(&user_settings);
+    let policy = crate::ai::tool_policy::ToolPolicy::for_user(
+        sandbox.user_hash.as_str(),
+        &user_settings,
+    )
+    .await;
     let policy_args = policy.to_cli_args();
     for a in &policy_args {
         claude_args.push(a.as_str());

@@ -56,6 +56,111 @@ pub struct Config {
     pub sandbox: SandboxConfig,
     pub agent_binding: AgentBindingConfig,
     pub rate_limit: RateLimitConfig,
+    /// v5.5: PII detection + compliance mode policies.
+    pub compliance: ComplianceConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ComplianceConfig {
+    /// "permissive" (default for self-host) / "standard" / "strict" /
+    /// "hipaa" / "soc2" / "gdpr". Determines the *baseline* policy maps;
+    /// `pii_*_overrides` 在此之上 patch 个别 class。
+    pub mode: ComplianceMode,
+    /// Apply scrub before writing audit_log.before_json / after_json.
+    /// Per-class override map. Empty = use mode's preset.
+    pub pii_audit_overrides: crate::pii::PolicyMap,
+    /// Apply scrub before posting webhook payload (outbound to operator's
+    /// third-party sink). Default: per mode.
+    pub pii_webhook_overrides: crate::pii::PolicyMap,
+    /// Apply scrub before assembling claude/codex/api prompt. Default for
+    /// `permissive` mode is *no scrub*. Strict modes turn this on.
+    pub pii_ai_prompt_overrides: crate::pii::PolicyMap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComplianceMode {
+    /// Self-host single-operator default. No PII scrub.
+    Permissive,
+    /// Webhook + audit get redaction; AI prompt unchanged.
+    Standard,
+    /// All three pipelines redacted/blocked.
+    Strict,
+    /// Strict + emit `compliance.hipaa_mode=true` in audit metadata.
+    Hipaa,
+    /// Strict + emit `compliance.soc2_mode=true` + tighter retention.
+    Soc2,
+    /// Strict + EU-residency hints in webhook headers.
+    Gdpr,
+}
+
+impl Default for ComplianceMode {
+    fn default() -> Self {
+        Self::Permissive
+    }
+}
+
+impl ComplianceMode {
+    /// Compiled-in base policy for each pipeline at this mode.
+    pub fn audit_baseline(self) -> crate::pii::PolicyMap {
+        match self {
+            Self::Permissive => crate::pii::PolicyMap::permissive(),
+            Self::Standard | Self::Strict | Self::Hipaa | Self::Soc2 | Self::Gdpr => {
+                crate::pii::PolicyMap::audit()
+            }
+        }
+    }
+    pub fn webhook_baseline(self) -> crate::pii::PolicyMap {
+        match self {
+            Self::Permissive => crate::pii::PolicyMap::permissive(),
+            Self::Standard => crate::pii::PolicyMap::audit(),
+            Self::Strict | Self::Hipaa | Self::Soc2 | Self::Gdpr => {
+                crate::pii::PolicyMap::strict()
+            }
+        }
+    }
+    pub fn ai_prompt_baseline(self) -> crate::pii::PolicyMap {
+        match self {
+            Self::Permissive | Self::Standard => crate::pii::PolicyMap::permissive(),
+            Self::Strict | Self::Hipaa | Self::Soc2 | Self::Gdpr => {
+                crate::pii::PolicyMap::strict()
+            }
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Permissive => "permissive",
+            Self::Standard => "standard",
+            Self::Strict => "strict",
+            Self::Hipaa => "hipaa",
+            Self::Soc2 => "soc2",
+            Self::Gdpr => "gdpr",
+        }
+    }
+}
+
+impl ComplianceConfig {
+    /// Effective audit policy (baseline + overrides).
+    pub fn audit_policy(&self) -> crate::pii::PolicyMap {
+        merge_policy(self.mode.audit_baseline(), &self.pii_audit_overrides)
+    }
+    pub fn webhook_policy(&self) -> crate::pii::PolicyMap {
+        merge_policy(self.mode.webhook_baseline(), &self.pii_webhook_overrides)
+    }
+    pub fn ai_prompt_policy(&self) -> crate::pii::PolicyMap {
+        merge_policy(self.mode.ai_prompt_baseline(), &self.pii_ai_prompt_overrides)
+    }
+}
+
+fn merge_policy(
+    mut base: crate::pii::PolicyMap,
+    overrides: &crate::pii::PolicyMap,
+) -> crate::pii::PolicyMap {
+    for (class, policy) in &overrides.0 {
+        base.0.insert(*class, *policy);
+    }
+    base
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

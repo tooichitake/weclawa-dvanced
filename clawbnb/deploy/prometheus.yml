@@ -1,0 +1,23 @@
+# Prometheus scrape config for weclawbot.
+# Daemon's /metrics endpoint is unauthenticated by design (standard Prom
+# pattern). The endpoint is bound to 127.0.0.1:18011 on the host; access
+# control is firewall / loopback. If exposing publicly, put behind nginx
+# basic auth.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: weclawbot
+    static_configs:
+      # host.docker.internal resolves to the host machine from inside
+      # the prometheus container. Adjust to the actual host IP if needed.
+      - targets: ['host.docker.internal:18011']
+    metrics_path: /metrics
+    scheme: http
+
+# Alerting rules (sample). Operators should `--web.enable-remote-write`
+# and pipe to alertmanager for paging. See docs/RUNBOOK.md.
+rule_files:
+  - /etc/prometheus/rules/*.yml

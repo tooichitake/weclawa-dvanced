@@ -134,11 +134,16 @@ pub async fn healthz() -> (StatusCode, Json<Value>) {
     }
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
+    // v5.5: surface compliance mode in healthz so monitoring dashboards
+    // can verify hipaa/soc2/gdpr modes are actually active. Compliance
+    // metadata is informational — does NOT flip overall_ok.
+    let compliance_mode = crate::config::Config::cached().compliance.mode.label();
     let body = json!({
         "ok": all_ok,
         "version": env!("CARGO_PKG_VERSION"),
         "checks": Value::Object(checks),
         "probe_ms": elapsed_ms,
+        "compliance_mode": compliance_mode,
     });
     let status = if all_ok {
         StatusCode::OK

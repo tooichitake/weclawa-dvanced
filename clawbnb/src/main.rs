@@ -15,6 +15,7 @@ mod ids;
 mod media;
 mod monitor;
 mod observability;
+mod pii;
 mod puppet;
 mod repo;
 mod runtime;
@@ -140,6 +141,20 @@ enum Commands {
         /// Input snapshot path
         snapshot: String,
     },
+    /// v5.5: Export one tenant's data as a self-contained `.tar.gz`.
+    ///
+    /// The bundle contains: state-db dump (subset for this tenant) +
+    /// config.json + per-user workspace tarballs + admin_keys for the
+    /// tenant. Use case: SaaS tenant migrates to self-hosting; backup
+    /// before suspending; compliance audit response.
+    ExportTenant {
+        /// Tenant id to export. Use `default` for single-tenant deployments.
+        #[arg(long)]
+        tenant: String,
+        /// Output path (`.tar.gz`).
+        #[arg(long, short = 'o')]
+        out: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -231,6 +246,9 @@ async fn main() {
         Commands::Backup { out } => cli::backup::backup(std::path::Path::new(&out)),
         Commands::Restore { snapshot } => {
             cli::backup::restore(std::path::Path::new(&snapshot))
+        }
+        Commands::ExportTenant { tenant, out } => {
+            cli::export_tenant::run(&tenant, std::path::Path::new(&out)).await
         }
     };
 

@@ -1,0 +1,32 @@
+apiVersion: v2
+name: weclawbot
+description: weclawbot — multi-tenant WeChat/Telegram/Discord/Feishu ⇄ Claude bridge
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/tooichitake/weclawa-advanced
+sources:
+  - https://github.com/tooichitake/weclawa-advanced
+maintainers:
+  - name: tooichitake
+keywords:
+  - wechat
+  - claude
+  - ai-bridge
+  - multi-tenant
+  - saas
+
+# weclawbot itself runs as a host service (needs podman + runsc for the
+# per-user sandbox). The k8s chart deploys the *peripherals*: Postgres,
+# Prometheus, Grafana, OTel Collector. For a single weclawbot daemon
+# Pod-per-cluster topology see values.yaml::daemon.enabled (experimental;
+# requires podman-in-pod + privileged: true).
+dependencies:
+  - name: postgresql
+    version: "15.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: kube-prometheus-stack
+    version: "65.x"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: monitoring.enabled
