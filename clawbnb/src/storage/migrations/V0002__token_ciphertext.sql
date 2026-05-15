@@ -9,5 +9,5 @@
 -- existing rows unencrypted; the migrator (in cli/start.rs) sweeps and
 -- backfills on first launch after upgrade.
 
-ALTER TABLE accounts ADD COLUMN token_ciphertext BLOB;
-ALTER TABLE accounts ADD COLUMN token_nonce      BLOB;
+ALTER TABLE accounts ADD COLUMN token_ciphertext BYTEA;
+ALTER TABLE accounts ADD COLUMN token_nonce      BYTEA;

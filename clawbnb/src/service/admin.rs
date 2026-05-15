@@ -173,7 +173,7 @@ pub async fn revoke_admin_key(
         .ok_or_else(|| internal_str("async pool not initialized".to_string()))?;
     // 取 target row + super_admin count
     let target: Option<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT name, role, revoked_at FROM admin_keys WHERE id = ?",
+        "SELECT name, role, revoked_at FROM admin_keys WHERE id = $1",
     )
     .bind(&id)
     .fetch_optional(&pool)
@@ -199,7 +199,7 @@ pub async fn revoke_admin_key(
 
     let now = chrono::Utc::now().to_rfc3339();
     let res = sqlx::query(
-        "UPDATE admin_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        "UPDATE admin_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
     )
     .bind(&now)
     .bind(&id)

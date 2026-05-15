@@ -103,7 +103,7 @@ pub async fn run(tenant_id: &str, out_path: &Path) -> Result<(), String> {
         async {
             sqlx::query_as(
                 "SELECT id, name, created_at, status, stripe_customer_id
-                 FROM tenants WHERE id = ?",
+                 FROM tenants WHERE id = $1",
             )
             .bind(tenant_id)
             .fetch_optional(&pool)
@@ -140,7 +140,7 @@ pub async fn run(tenant_id: &str, out_path: &Path) -> Result<(), String> {
     // --- 3) users ---
     let user_hashes: Vec<String> = block_on_async(async {
         let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT hash FROM users WHERE tenant_id = ?")
+            sqlx::query_as("SELECT hash FROM users WHERE tenant_id = $1")
                 .bind(tenant_id)
                 .fetch_all(&pool)
                 .await

@@ -32,7 +32,7 @@ impl SqlxDefaultsRepo {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO defaults (id, settings_json, updated_at)
-             VALUES (1, ?, ?)
+             VALUES (1, $1, $2)
              ON CONFLICT(id) DO UPDATE SET
                  settings_json = excluded.settings_json,
                  updated_at = excluded.updated_at",
@@ -51,7 +51,7 @@ impl SqlxDefaultsRepo {
         // v5.2 O2: ANSI ON CONFLICT (SQLite 3.24+ / Postgres)
         let res = sqlx::query(
             "INSERT INTO defaults (id, settings_json, updated_at)
-             VALUES (1, ?, ?)
+             VALUES (1, $1, $2)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(&json)

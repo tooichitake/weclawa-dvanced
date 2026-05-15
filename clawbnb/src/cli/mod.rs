@@ -6,6 +6,7 @@ pub mod open_browser;
 pub mod doctor;
 pub mod export_tenant;
 pub mod import;
+pub mod import_sqlite;
 pub mod login;
 pub mod restart;
 pub mod send;

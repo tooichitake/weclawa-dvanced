@@ -13,7 +13,7 @@
 -- (SELECT IFNULL(MAX(version),0)+1 FROM ...) 才能保证递增。
 -- v2.2 暂时只加列；callsite enforcement 在 repo::settings 增量补。
 
-ALTER TABLE user_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE user_settings ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
 
 -- v2.2 L4.1: 容器日志持久化。
 --
@@ -25,7 +25,7 @@ ALTER TABLE user_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
 -- 必须持久化才能调试。schema 现在就建好，reconciler 收 orphan 容器时
 -- 可以同步 cleanup 老日志。
 CREATE TABLE sandbox_logs (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  id              BIGSERIAL PRIMARY KEY,
   user_hash       TEXT NOT NULL,
   container_id    TEXT,
   ts              TEXT NOT NULL,

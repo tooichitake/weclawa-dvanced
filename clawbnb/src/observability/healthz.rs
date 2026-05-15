@@ -156,7 +156,9 @@ pub async fn healthz() -> (StatusCode, Json<Value>) {
 fn check_db() -> Result<(), String> {
     block_on_async(async {
         let pool = try_global_async_pool().ok_or_else(|| "pool not initialized".to_string())?;
-        let row: (i64,) = sqlx::query_as("SELECT 1")
+        // v5.6 PG: literal `1` is INT4; cast to BIGINT so Rust `i64`
+        // decodes cleanly.
+        let row: (i64,) = sqlx::query_as("SELECT 1::BIGINT")
             .fetch_one(&pool)
             .await
             .map_err(|e| format!("select: {e}"))?;

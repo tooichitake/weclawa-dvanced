@@ -12,6 +12,26 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # v5.6: PG is now the only backend. Tests require a live Postgres
+    # 16 service container; tests that touch the DB pool read
+    # DATABASE_URL injected here.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weclawbot
+          POSTGRES_PASSWORD: weclawbot
+          POSTGRES_DB: weclawbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weclawbot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://weclawbot:weclawbot@localhost:5432/weclawbot_test
+      WECLAWBOT_PG_URL: postgres://weclawbot:weclawbot@localhost:5432/weclawbot_test
     defaults:
       run:
         working-directory: clawbnb
@@ -22,6 +42,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install postgresql-client (pg_dump/psql for backup CLI tests)
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -49,7 +72,9 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test (host)
-        run: cargo test --release
+        # Single-threaded because PG schema is shared across tests; real
+        # per-test isolation needs testcontainers crate (follow-up).
+        run: cargo test --release -- --test-threads=1
 
       - name: cargo test (mcp)
         working-directory: clawbnb/weclawbot-mcp

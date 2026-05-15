@@ -48,7 +48,7 @@ impl SqlxTenantRepo {
         sqlx::query_as::<_, AsyncTenant>(
             "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
                     billing_status, billing_period_end, last_billing_event, last_billing_event_at
-             FROM tenants WHERE id = ?",
+             FROM tenants WHERE id = $1",
         )
         .bind(id.as_str())
         .fetch_optional(&self.pool)
@@ -63,15 +63,17 @@ impl SqlxTenantRepo {
     pub async fn is_active(&self, id: &TenantId) -> Result<bool, DbError> {
         let now_rfc = chrono::Utc::now().to_rfc3339();
         let row: Option<(i64,)> = sqlx::query_as(
+            // PG literals are INT4; cast result to BIGINT so Rust `i64`
+            // tuple decodes cleanly (v5.6 PG-only).
             "SELECT CASE
                 WHEN status != 'active' THEN 0
                 WHEN billing_status = 'active' THEN 1
                 WHEN billing_status = 'pending'
                      AND grace_until IS NOT NULL
-                     AND grace_until > ? THEN 1
+                     AND grace_until > $1 THEN 1
                 ELSE 0
-             END
-             FROM tenants WHERE id = ?",
+             END::BIGINT
+             FROM tenants WHERE id = $2",
         )
         .bind(&now_rfc)
         .bind(id.as_str())
@@ -91,10 +93,10 @@ impl SqlxTenantRepo {
         let now = chrono::Utc::now().to_rfc3339();
         let res = sqlx::query(
             "UPDATE tenants
-             SET billing_status = ?,
-                 last_billing_event = ?,
-                 last_billing_event_at = ?
-             WHERE id = ?",
+             SET billing_status = $1,
+                 last_billing_event = $2,
+                 last_billing_event_at = $3
+             WHERE id = $4",
         )
         .bind(billing_status)
         .bind(event_type)
@@ -113,7 +115,7 @@ impl SqlxTenantRepo {
         sqlx::query_as::<_, AsyncTenant>(
             "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
                     billing_status, billing_period_end, last_billing_event, last_billing_event_at
-             FROM tenants WHERE stripe_customer_id = ?",
+             FROM tenants WHERE stripe_customer_id = $1",
         )
         .bind(customer_id)
         .fetch_optional(&self.pool)
@@ -174,7 +176,7 @@ mod tests {
         .await
         .unwrap();
         let future = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339();
-        sqlx::query("UPDATE tenants SET grace_until = ? WHERE id = 'default'")
+        sqlx::query("UPDATE tenants SET grace_until = $1 WHERE id = 'default'")
             .bind(&future)
             .execute(&r.pool)
             .await

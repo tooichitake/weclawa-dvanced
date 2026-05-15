@@ -25,12 +25,12 @@
 CREATE TABLE user_trust_inputs (
   user_hash        TEXT PRIMARY KEY,
   tenant_id        TEXT NOT NULL DEFAULT 'default',
-  success_rate     REAL NOT NULL DEFAULT 0.5,
-  uptime           REAL NOT NULL DEFAULT 0.5,
-  threat           REAL NOT NULL DEFAULT 0.5,
-  integrity        REAL NOT NULL DEFAULT 0.5,
+  success_rate     DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  uptime           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  threat           DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  integrity        DOUBLE PRECISION NOT NULL DEFAULT 0.5,
   --Computed score - cached so hot path不重算。后台 task 写。
-  score            REAL NOT NULL DEFAULT 0.5,
+  score            DOUBLE PRECISION NOT NULL DEFAULT 0.5,
   --'trusted' / 'standard' / 'restricted' / 'quarantined'
   tier             TEXT NOT NULL DEFAULT 'standard',
   updated_at       TEXT NOT NULL,
@@ -41,13 +41,13 @@ CREATE TABLE user_trust_inputs (
 CREATE INDEX idx_user_trust_tenant ON user_trust_inputs (tenant_id, tier);
 
 CREATE TABLE user_trust_history (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           BIGSERIAL PRIMARY KEY,
   user_hash    TEXT NOT NULL,
   tenant_id    TEXT NOT NULL DEFAULT 'default',
   ts           TEXT NOT NULL,
   --计算时各因子和 score 的快照（JSON）— 便于 v3.2 改公式后回溯
   inputs_json  TEXT NOT NULL,
-  score        REAL NOT NULL,
+  score        DOUBLE PRECISION NOT NULL,
   tier         TEXT NOT NULL,
   --上一 tier；首次记录为 null
   prev_tier    TEXT

@@ -102,7 +102,7 @@ pub async fn mint_new_key_async(
     sqlx::query(
         "INSERT INTO admin_keys
              (id, name, key_hash, role, created_at, last_used_at, revoked_at, tenant_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(&mint_inner.record.id)
     .bind(&mint_inner.record.name)

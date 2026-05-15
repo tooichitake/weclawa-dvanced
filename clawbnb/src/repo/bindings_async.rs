@@ -19,7 +19,7 @@ impl SqlxBindingRepo {
     pub async fn get(&self, user: &WeixinUserId) -> Result<Option<Binding>, DbError> {
         let row: Option<(String, String, String)> = sqlx::query_as(
             "SELECT active_account_id, agent_id, updated_at
-             FROM bindings WHERE weixin_user_id = ?",
+             FROM bindings WHERE weixin_user_id = $1",
         )
         .bind(user.as_str())
         .fetch_optional(&self.pool)
@@ -45,7 +45,7 @@ impl SqlxBindingRepo {
         let res = sqlx::query(
             "INSERT INTO bindings
                  (weixin_user_id, active_account_id, agent_id, updated_at)
-             VALUES (?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT (weixin_user_id) DO NOTHING",
         )
         .bind(user.as_str())
@@ -56,7 +56,7 @@ impl SqlxBindingRepo {
         .await
         .map_err(|e| DbError::Pool(format!("sqlx binding insert: {e}")))?;
         if res.rows_affected() == 0 {
-            sqlx::query("UPDATE bindings SET updated_at = ? WHERE weixin_user_id = ?")
+            sqlx::query("UPDATE bindings SET updated_at = $1 WHERE weixin_user_id = $2")
                 .bind(&now)
                 .bind(user.as_str())
                 .execute(&self.pool)
@@ -73,8 +73,8 @@ impl SqlxBindingRepo {
     ) -> Result<bool, DbError> {
         let now = Utc::now().to_rfc3339();
         let res = sqlx::query(
-            "UPDATE bindings SET active_account_id = ?, updated_at = ?
-             WHERE weixin_user_id = ?",
+            "UPDATE bindings SET active_account_id = $1, updated_at = $2
+             WHERE weixin_user_id = $3",
         )
         .bind(active_account_id.as_str())
         .bind(&now)
@@ -86,7 +86,7 @@ impl SqlxBindingRepo {
     }
 
     pub async fn delete(&self, user: &WeixinUserId) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM bindings WHERE weixin_user_id = ?")
+        let res = sqlx::query("DELETE FROM bindings WHERE weixin_user_id = $1")
             .bind(user.as_str())
             .execute(&self.pool)
             .await
@@ -134,7 +134,7 @@ mod tests {
     async fn seed_account(pool: &AsyncDbPool, id: &str) {
         sqlx::query(
             "INSERT INTO accounts (account_id, base_url, saved_at)
-             VALUES (?, ?, ?)",
+             VALUES ($1, $2, $3)",
         )
         .bind(id)
         .bind("https://ilinkai.weixin.qq.com")

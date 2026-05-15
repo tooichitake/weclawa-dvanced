@@ -155,6 +155,12 @@ enum Commands {
         #[arg(long, short = 'o')]
         out: String,
     },
+    /// v5.6: Migrate data from a legacy SQLite `state.db` into the
+    /// current Postgres backend. One-way; daemon must be stopped.
+    ImportSqlite {
+        /// Path to the legacy `state.db` file.
+        sqlite_path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -249,6 +255,9 @@ async fn main() {
         }
         Commands::ExportTenant { tenant, out } => {
             cli::export_tenant::run(&tenant, std::path::Path::new(&out)).await
+        }
+        Commands::ImportSqlite { sqlite_path } => {
+            cli::import_sqlite::run(std::path::Path::new(&sqlite_path))
         }
     };
 

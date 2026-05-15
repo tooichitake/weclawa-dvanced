@@ -17,7 +17,7 @@
 -- window (~minutes) but small enough to keep table tiny.
 
 CREATE TABLE seen_messages (
-  msg_id         INTEGER PRIMARY KEY,
+  msg_id         BIGINT PRIMARY KEY,
   first_seen_at  TEXT NOT NULL
 );
 

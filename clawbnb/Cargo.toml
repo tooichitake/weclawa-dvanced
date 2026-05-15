@@ -21,20 +21,10 @@ default = []
 # containers as before.
 acp = []
 
-# v5 M6 — Postgres backend support. **Feature flag 占位 only**：
-# 启用本 feature 会把 sqlx 编译时 enable `postgres` driver，让 sqlx::Any
-# 在运行时可以连 Postgres。但 weclawbot 当前所有 repo 用具体
-# `SqlitePool` 类型 ── 不是 `AnyPool`。真切 Postgres 需 v5.1 PR：
-#   1. 把 repo 里的 `sqlx::SqlitePool` 改成 `sqlx::AnyPool`
-#   2. 检查所有 SQLite-specific SQL（PRAGMA / INSERT OR IGNORE 等）的
-#      Postgres 等价（多数 LSP-标准 SQL 直接通；ON CONFLICT 子句 SQLite
-#      和 Postgres 一致；只有 PRAGMA journal_mode / busy_timeout 需要
-#      条件编译）
-#   3. Migration runner 适配（refinery_schema_history vs _sqlx_migrations 已
-#      处理，但 SQL 文件本身需检 Postgres 语法）
-#
-# 本期保留 flag 占位，让 Cargo 编译时检测到这条路径存在；真切换给 v5.1。
-postgres = ["sqlx/postgres"]
+# v5.6: postgres feature flag deleted — PG is now the always-on backend.
+# To run weclawbot, set WECLAWBOT_PG_URL (or DATABASE_URL) and ensure
+# Postgres 13+ is reachable. The sqlx/postgres feature is always on
+# (see [dependencies].sqlx below).
 
 # v5.2 O3 — Discord Gateway WebSocket support.
 discord-gateway = ["dep:tokio-tungstenite", "dep:futures"]
@@ -104,10 +94,17 @@ tar = "0.4"
 flate2 = "1"
 url = "2"
 
-# v4.2: SQLite-backed state via **sqlx only** (rusqlite/r2d2/refinery 都
-# 删了)。bundled-sqlite 让 binary 自包含 —— 不依赖系统 libsqlite3。所有
-# repo + migration runner 走 sqlx async pool。
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+# v5.6: PG-only. Daemon runtime use Postgres exclusively (no more
+# `--features postgres` cfg gate). sqlite feature kept only because the
+# `weclawbot import-sqlite ./state.db` one-shot migration command needs
+# to READ the legacy DB and write to PG. After all users have migrated
+# (some future v7), `sqlx/sqlite` feature comes out too.
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "sqlite", "macros"] }
+
+# v5.6: SQLite read-only via rusqlite for the one-shot import-sqlite
+# command. Kept non-optional so disaster-recovery (someone hands you an
+# old state.db) is always one CLI call away.
+rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
 

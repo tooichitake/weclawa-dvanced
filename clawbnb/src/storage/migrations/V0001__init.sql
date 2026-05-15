@@ -48,7 +48,7 @@ CREATE TABLE users (
   user_id_hint      TEXT,
   created_at        TEXT NOT NULL,
   last_seen_at      TEXT,
-  message_count     INTEGER NOT NULL DEFAULT 0,
+  message_count     BIGINT NOT NULL DEFAULT 0,
   sync_state        TEXT NOT NULL DEFAULT 'unknown',
   last_sync_at      TEXT,
   last_sync_error   TEXT
@@ -61,7 +61,7 @@ CREATE TABLE user_settings (
 );
 
 CREATE TABLE user_history (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           BIGSERIAL PRIMARY KEY,
   user_hash    TEXT NOT NULL REFERENCES users(hash) ON DELETE CASCADE,
   role         TEXT NOT NULL CHECK (role IN ('user','assistant')),
   content      TEXT NOT NULL,
@@ -71,7 +71,7 @@ CREATE INDEX idx_history_user_time ON user_history (user_hash, created_at);
 
 CREATE TABLE console_sessions (
   user_hash      TEXT PRIMARY KEY REFERENCES users(hash) ON DELETE CASCADE,
-  in_menu        INTEGER NOT NULL,
+  in_menu        BIGINT NOT NULL,
   current_path   TEXT NOT NULL DEFAULT '[]',
   last_input_at  TEXT NOT NULL
 );
@@ -95,7 +95,7 @@ CREATE TABLE admin_keys (
 CREATE INDEX idx_admin_keys_active ON admin_keys (revoked_at) WHERE revoked_at IS NULL;
 
 CREATE TABLE audit_log (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  id            BIGSERIAL PRIMARY KEY,
   ts            TEXT NOT NULL,
   actor_key_id  TEXT,                     -- nullable for 'system' actor
   action        TEXT NOT NULL,
@@ -109,6 +109,6 @@ CREATE INDEX idx_audit_ts ON audit_log (ts DESC);
 CREATE TABLE rate_limits (
   scope_key       TEXT NOT NULL,
   window_start_ts TEXT NOT NULL,
-  count           INTEGER NOT NULL DEFAULT 0,
+  count           BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (scope_key, window_start_ts)
 );

@@ -20,7 +20,7 @@ impl SqlxConfigKvRepo {
 
     pub async fn get(&self, key: &str) -> Result<Option<Value>, DbError> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT value_json FROM config_kv WHERE key = ?")
+            sqlx::query_as("SELECT value_json FROM config_kv WHERE key = $1")
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await
@@ -36,7 +36,7 @@ impl SqlxConfigKvRepo {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO config_kv (key, value_json, updated_at)
-             VALUES (?, ?, ?)
+             VALUES ($1, $2, $3)
              ON CONFLICT(key) DO UPDATE SET
                  value_json = excluded.value_json,
                  updated_at = excluded.updated_at",
@@ -51,7 +51,7 @@ impl SqlxConfigKvRepo {
     }
 
     pub async fn delete(&self, key: &str) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM config_kv WHERE key = ?")
+        let res = sqlx::query("DELETE FROM config_kv WHERE key = $1")
             .bind(key)
             .execute(&self.pool)
             .await

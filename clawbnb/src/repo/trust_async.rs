@@ -21,7 +21,7 @@ impl SqlxTrustRepo {
         let row: Option<(String, String, f64, f64, f64, f64, f64, String, String, String)> = sqlx::query_as(
             "SELECT user_hash, tenant_id, success_rate, uptime, threat, integrity,
                     score, tier, updated_at, tier_since
-             FROM user_trust_inputs WHERE user_hash = ?",
+             FROM user_trust_inputs WHERE user_hash = $1",
         )
         .bind(user_hash)
         .fetch_optional(&self.pool)
@@ -45,7 +45,7 @@ impl SqlxTrustRepo {
 
     pub async fn upsert(&self, snap: &TrustSnapshot) -> Result<(), DbError> {
         let prev: Option<(String,)> =
-            sqlx::query_as("SELECT tier FROM user_trust_inputs WHERE user_hash = ?")
+            sqlx::query_as("SELECT tier FROM user_trust_inputs WHERE user_hash = $1")
                 .bind(&snap.user_hash)
                 .fetch_optional(&self.pool)
                 .await
@@ -62,7 +62,7 @@ impl SqlxTrustRepo {
             "INSERT INTO user_trust_inputs
                  (user_hash, tenant_id, success_rate, uptime, threat, integrity,
                   score, tier, updated_at, tier_since)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT(user_hash) DO UPDATE SET
                  tenant_id    = excluded.tenant_id,
                  success_rate = excluded.success_rate,
@@ -99,7 +99,7 @@ impl SqlxTrustRepo {
             sqlx::query(
                 "INSERT INTO user_trust_history
                      (user_hash, tenant_id, ts, inputs_json, score, tier, prev_tier)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(&snap.user_hash)
             .bind(&snap.tenant_id)
@@ -124,7 +124,7 @@ impl SqlxTrustRepo {
             "SELECT user_hash, tenant_id, success_rate, uptime, threat, integrity,
                     score, tier, updated_at, tier_since
              FROM user_trust_inputs
-             WHERE tenant_id = ? AND tier = ?
+             WHERE tenant_id = $1 AND tier = $2
              ORDER BY score ASC",
         )
         .bind(tenant_id)

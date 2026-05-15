@@ -27,8 +27,14 @@ CREATE TABLE tenants (
 );
 
 -- Seed the default tenant for backwards compat. v2.2 数据全部归这里。
+-- v5.6: PG-native time function (was SQLite `datetime('now')`).
 INSERT INTO tenants (id, name, created_at, status)
-VALUES ('default', 'Default Tenant', datetime('now'), 'active');
+VALUES (
+  'default',
+  'Default Tenant',
+  to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  'active'
+);
 
 -- ## user-scoped 表加 tenant_id 列
 --
