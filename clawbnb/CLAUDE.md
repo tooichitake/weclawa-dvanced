@@ -23,13 +23,28 @@ cargo test --release --bin weclawbot
 User-facing daemon symlink: `~/.local/bin/weclawbot →
 ~/weclawbot-src/target/release/weclawbot`
 
-After building from worktree, copy over the symlink target:
+**CRITICAL: deploy only the default-feature build.** Feature-combo builds
+(`--features postgres` etc.) overwrite `target/release/weclawbot` with a
+binary that requires env vars at boot. Deploying it accidentally =
+daemon crashes at startup → `ERR_CONNECTION_REFUSED` on the web GUI.
+
+Always immediately follow any `--features ...` validation with a clean
+default build before copying:
 
 ```bash
-cp /mnt/c/projects/weclawa-advanced/.claude/worktrees/<branch>/clawbnb/target/release/weclawbot \
-   ~/weclawbot-src/target/release/weclawbot
+cd /mnt/c/projects/weclawa-advanced/.claude/worktrees/<branch>/clawbnb
 
-# If daemon was running, restart it for the new binary to take effect:
+# After kitchen-sink validation, rebuild default before deploy:
+cargo build --release --bin weclawbot
+
+# Verify it's the SQLite-default binary (PG-enabled prints these strings):
+strings target/release/weclawbot | grep -c WECLAWBOT_PG_URL
+# Expected: 0  (if >0, you're about to deploy the PG build by accident)
+
+# Deploy:
+cp target/release/weclawbot ~/weclawbot-src/target/release/weclawbot
+
+# Restart:
 weclawbot stop && weclawbot start
 ```
 
