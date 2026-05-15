@@ -1,0 +1,2135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>weclawbot Console</title>
+<style>
+  *,*::before,*::after { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  header { background: #1e293b; border-bottom: 1px solid #334155;
+           padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .pill { background: #064e3b; color: #34d399; padding: 2px 10px;
+                 border-radius: 12px; font-size: 12px; font-weight: 600; }
+  header .pill.down { background: #7f1d1d; color: #fca5a5; }
+  header .meta { color: #94a3b8; font-size: 12px; margin-left: auto; }
+  nav.tabs { background: #1e293b; padding: 0 24px; display: flex; gap: 4px;
+             border-bottom: 1px solid #334155; }
+  nav.tabs button { background: none; border: none; color: #94a3b8;
+                    padding: 12px 16px; font: inherit; cursor: pointer;
+                    border-bottom: 2px solid transparent; }
+  nav.tabs button.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+  nav.tabs button:hover { color: #e2e8f0; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+          padding: 20px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600;
+             color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+               gap: 12px; }
+  .stat { text-align: center; }
+  .stat .value { font-size: 28px; font-weight: 700; color: #38bdf8; }
+  .stat .label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+  .btn { background: #3b82f6; color: white; border: none; padding: 8px 16px;
+         border-radius: 6px; cursor: pointer; font: inherit; font-weight: 500; }
+  .btn:hover { background: #2563eb; }
+  .btn.secondary { background: #334155; }
+  .btn.secondary:hover { background: #475569; }
+  .btn.danger { background: #b91c1c; }
+  .btn.danger:hover { background: #991b1b; }
+  .btn-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; }
+  table th, table td { padding: 8px 12px; text-align: left;
+                       border-bottom: 1px solid #334155; font-size: 13px; }
+  table th { color: #94a3b8; font-weight: 500; font-size: 11px;
+             text-transform: uppercase; letter-spacing: 0.5px; }
+  table tr:hover td { background: #243046; cursor: pointer; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+           font-size: 11px; font-weight: 600; }
+  .badge-ok    { background: #064e3b; color: #34d399; }
+  .badge-warn  { background: #78350f; color: #fbbf24; }
+  .badge-err   { background: #7f1d1d; color: #fca5a5; }
+  .badge-info  { background: #1e3a8a; color: #93c5fd; }
+  textarea.json { width: 100%; min-height: 360px; background: #0f172a;
+                  color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;
+                  padding: 12px; font: 12px/1.45 "JetBrains Mono", Consolas, monospace;
+                  resize: vertical; }
+  textarea.json.invalid { border-color: #b91c1c; }
+  .row { display: flex; gap: 16px; align-items: flex-start; }
+  .row > .left { flex: 0 0 280px; }
+  .row > .right { flex: 1; min-width: 0; }
+  details { background: #243046; border-radius: 6px; padding: 8px 12px;
+            margin-bottom: 8px; }
+  details summary { cursor: pointer; outline: none; font-weight: 500; }
+  details[open] summary { margin-bottom: 8px; }
+  .empty { text-align: center; padding: 32px; color: #64748b; }
+  .small { font-size: 12px; color: #94a3b8; }
+  .skill-list { list-style: none; padding: 0; margin: 8px 0; }
+  .skill-list li { padding: 6px 0; border-bottom: 1px solid #334155; font-size: 13px; }
+  .skill-list li:last-child { border-bottom: none; }
+  .skill-list code { color: #38bdf8; }
+  .footer { text-align: center; padding: 24px; color: #475569; font-size: 12px; }
+  .activity-log { background: #0f172a; border: 1px solid #334155;
+                  border-radius: 6px; padding: 12px; max-height: 200px;
+                  overflow-y: auto; font: 12px/1.5 "JetBrains Mono", Consolas, monospace; }
+
+  /* ---- Users tab: master/detail layout ---- */
+  .users-shell { display: grid; grid-template-columns: 320px 1fr; gap: 16px;
+                 align-items: start; }
+  @media (max-width: 900px) {
+    .users-shell { grid-template-columns: 1fr; }
+  }
+  .users-sidebar { background: #1e293b; border: 1px solid #334155;
+                   border-radius: 8px; padding: 12px; max-height: 75vh;
+                   overflow-y: auto; }
+  .users-sidebar input.filter {
+    width: 100%; background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 6px; padding: 8px 10px; font: inherit; margin-bottom: 10px;
+  }
+  .user-card { padding: 10px 12px; border-radius: 6px; cursor: pointer;
+               border: 1px solid transparent; margin-bottom: 4px;
+               transition: background 0.1s; }
+  .user-card:hover { background: #243046; }
+  .user-card.selected { background: #1e3a8a; border-color: #3b82f6; }
+  .user-card .row1 { display: flex; align-items: center;
+                     justify-content: space-between; gap: 8px; }
+  .user-card .name { font-weight: 600; font-size: 13px;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-card .row2 { display: flex; align-items: center; gap: 6px;
+                     margin-top: 4px; color: #94a3b8; font-size: 11px; }
+  .user-card .msgs { background: #334155; color: #e2e8f0; padding: 1px 6px;
+                     border-radius: 10px; font-weight: 600; }
+
+  .user-detail-pane { min-width: 0; }
+  .user-detail-pane.empty { padding: 60px 24px; color: #64748b;
+                            text-align: center; background: #1e293b;
+                            border: 1px dashed #334155; border-radius: 8px; }
+  .user-subtabs { display: flex; gap: 2px; background: #1e293b;
+                  border: 1px solid #334155; border-bottom: none;
+                  border-radius: 8px 8px 0 0; padding: 0 8px; }
+  .user-subtabs button { background: none; border: none; color: #94a3b8;
+                         padding: 12px 14px; font: inherit; font-weight: 500;
+                         cursor: pointer; border-bottom: 2px solid transparent; }
+  .user-subtabs button.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+  .user-subtabs button:hover:not(.active) { color: #e2e8f0; }
+  .user-subpanel { background: #1e293b; border: 1px solid #334155;
+                   border-top: none; border-radius: 0 0 8px 8px; padding: 20px; }
+
+  /* ---- Overview panel ---- */
+  .ov-grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px;
+             font-size: 13px; align-items: baseline; }
+  .ov-grid dt { color: #94a3b8; }
+  .ov-grid dd { margin: 0; word-break: break-all; }
+  .ov-grid dd code { color: #38bdf8; }
+
+  /* ---- History panel ---- */
+  .chat-log { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
+  .chat-bubble { padding: 10px 14px; border-radius: 14px; margin-bottom: 8px;
+                 max-width: 80%; white-space: pre-wrap; word-break: break-word;
+                 font-size: 13px; line-height: 1.55; }
+  .chat-bubble.user { background: #1e3a8a; color: #e2e8f0; align-self: flex-end;
+                      border-bottom-right-radius: 4px; }
+  .chat-bubble.assistant { background: #334155; color: #e2e8f0;
+                           border-bottom-left-radius: 4px; }
+  .chat-row { display: flex; flex-direction: column; margin-bottom: 4px; }
+  .chat-row.user { align-items: flex-end; }
+  .chat-row.assistant { align-items: flex-start; }
+  .chat-meta { font-size: 10px; color: #64748b; margin-bottom: 2px; padding: 0 4px; }
+
+  /* ---- Action buttons ---- */
+  .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 700px) { .actions-grid { grid-template-columns: 1fr; } }
+  .action-card { background: #0f172a; border: 1px solid #334155;
+                 border-radius: 8px; padding: 16px; }
+  .action-card h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .action-card p { margin: 0 0 12px; font-size: 12px; color: #94a3b8; }
+
+  /* ---- Modal (login + add-account QR + create-key) ---- */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.92);
+                    display: flex; align-items: center; justify-content: center; z-index: 9999; }
+  .modal-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+                padding: 28px; max-width: 520px; width: 92%; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+  .modal-card h2 { margin: 0 0 8px; font-size: 17px; color: #e2e8f0; }
+  .modal-card .modal-sub { color: #94a3b8; font-size: 13px; margin: 0 0 16px; }
+  .modal-card .modal-input { width: 100%; padding: 11px 12px; background: #0f172a;
+                             border: 1px solid #334155; border-radius: 6px; color: #e2e8f0;
+                             font: 13px/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .modal-card select.modal-input { font-family: inherit; }
+  .modal-card .modal-msg { color: #fbbf24; font-size: 12px; margin: 10px 0 0; min-height: 1em; }
+  .modal-card .modal-msg.error { color: #fca5a5; }
+  .modal-card .modal-msg.success { color: #34d399; }
+  .modal-card .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .modal-card .modal-actions .btn { flex: 1; }
+  .modal-card .qr-wrap { display: flex; flex-direction: column; align-items: center;
+                         gap: 14px; padding: 12px 0; }
+  .modal-card .qr-wrap img { width: 240px; height: 240px; background: #fff;
+                             border-radius: 6px; padding: 8px; }
+  .modal-card .qr-status { font-size: 13px; color: #94a3b8; }
+  .modal-card .qr-status.confirmed { color: #34d399; font-weight: 600; }
+  .modal-card .secret-banner { background: #064e3b; border: 1px solid #10b981;
+                               border-radius: 6px; padding: 12px; margin: 12px 0; }
+  .modal-card .secret-banner code { display: block; word-break: break-all;
+                                    background: #022c22; padding: 8px; border-radius: 4px;
+                                    color: #6ee7b7; font-size: 12px; margin-top: 6px; }
+  .modal-card .secret-banner .warn { color: #fbbf24; font-size: 11px;
+                                     font-weight: 600; margin: 8px 0 0; }
+
+  /* ---- Header admin info / logout ---- */
+  .admin-info { display: flex; gap: 10px; align-items: center; margin-left: 16px;
+                font-size: 12px; color: #94a3b8; }
+  .admin-info .who { color: #38bdf8; font-weight: 600; }
+  .admin-info .role-pill { background: #1e3a8a; color: #93c5fd; padding: 1px 8px;
+                           border-radius: 8px; font-size: 11px; font-weight: 600; }
+  .admin-info .role-pill.super { background: #7c2d12; color: #fdba74; }
+  .admin-info .logout { background: none; border: 1px solid #334155; color: #94a3b8;
+                        padding: 4px 10px; border-radius: 4px; cursor: pointer;
+                        font: inherit; font-size: 11px; }
+  .admin-info .logout:hover { color: #fca5a5; border-color: #ef4444; }
+
+  /* ---- OAuth status card (Phase 5.3) ---- */
+  .oauth-status { display: flex; gap: 12px; align-items: center; }
+  .oauth-badge { padding: 4px 12px; border-radius: 4px; font-size: 12px;
+                 font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .oauth-badge.ok      { background: #064e3b; color: #34d399; }
+  .oauth-badge.warn    { background: #78350f; color: #fbbf24; }
+  .oauth-badge.urgent  { background: #7c2d12; color: #fb923c; }
+  .oauth-badge.expired { background: #7f1d1d; color: #fca5a5; }
+  .oauth-badge.unknown { background: #334155; color: #cbd5e1; }
+  .oauth-detail { color: #94a3b8; font-size: 13px; }
+
+  /* ---- Form-style defaults editor (replaces JSON textarea) ---- */
+  .form-row { margin-bottom: 18px; }
+  .form-row > label { display: block; font-weight: 600; color: #cbd5e1;
+                       font-size: 13px; margin-bottom: 6px; }
+  .form-control { width: 100%; max-width: 480px; padding: 8px 10px;
+                  background: #0f172a; border: 1px solid #334155;
+                  border-radius: 4px; color: #e2e8f0; font: 13px sans-serif; }
+  .form-control:focus { outline: none; border-color: #38bdf8; }
+  select.form-control { padding-right: 24px; }
+  .checkbox-list { background: #0f172a; border: 1px solid #334155;
+                   border-radius: 6px; padding: 10px 12px; max-height: 200px;
+                   overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .checkbox-list label { display: flex; align-items: center; gap: 8px;
+                         color: #e2e8f0; font-size: 13px; cursor: pointer;
+                         padding: 4px 0; font-weight: normal; margin: 0; }
+  .checkbox-list label:hover { color: #38bdf8; }
+  .checkbox-list .empty { color: #94a3b8; font-size: 12px; }
+  .kv-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+  .kv-row { display: flex; gap: 8px; align-items: center; }
+  .kv-row input { flex: 1; padding: 6px 10px; background: #0f172a;
+                  border: 1px solid #334155; border-radius: 4px;
+                  color: #e2e8f0; font: 12px ui-monospace, Menlo, monospace; }
+  .kv-row .remove-btn { background: none; border: 1px solid #ef4444;
+                        color: #fca5a5; padding: 4px 10px; border-radius: 4px;
+                        cursor: pointer; font: 11px sans-serif; }
+  .btn-small { font-size: 11px; padding: 4px 10px; }
+
+  /* ---- Admin keys tab table ---- */
+  .keys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .keys-table th, .keys-table td { padding: 10px 12px; text-align: left;
+                                    border-bottom: 1px solid #334155; }
+  .keys-table th { color: #94a3b8; font-weight: 600; font-size: 11px;
+                   text-transform: uppercase; letter-spacing: 0.5px; }
+  .keys-table tr.revoked { opacity: 0.4; }
+  .keys-table .pill-role { background: #1e3a8a; color: #93c5fd;
+                            padding: 2px 8px; border-radius: 8px; font-size: 11px;
+                            font-weight: 600; }
+  .keys-table .pill-role.super { background: #7c2d12; color: #fdba74; }
+  .keys-table .pill-role.ro { background: #334155; color: #cbd5e1; }
+  .keys-table .pill-status { padding: 1px 8px; border-radius: 8px; font-size: 11px;
+                              font-weight: 600; }
+  .keys-table .pill-status.active { background: #064e3b; color: #34d399; }
+  .keys-table .pill-status.revoked { background: #7f1d1d; color: #fca5a5; }
+  .keys-table .btn-revoke { background: none; border: 1px solid #ef4444;
+                             color: #fca5a5; padding: 4px 10px; border-radius: 4px;
+                             cursor: pointer; font: inherit; font-size: 11px; }
+  .keys-table .btn-revoke:disabled { opacity: 0.3; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>weclawbot</h1>
+  <span id="status-pill" class="pill">checking...</span>
+  <span class="meta">
+    v<span id="version">?</span>
+    · pid <span id="pid">?</span>
+    · <span id="users-count">0</span> users
+    · <span id="accounts-count">0</span> accounts
+  </span>
+  <!-- Phase 7: 当前登录管理员信息 + 退出按钮 -->
+  <div id="admin-info" class="admin-info" hidden>
+    <span class="who" id="admin-who">?</span>
+    <span class="role-pill" id="admin-role-pill">?</span>
+    <button class="logout" id="logout-btn">退出</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="dashboard" class="active">Dashboard</button>
+  <button data-tab="defaults">Defaults</button>
+  <button data-tab="users">Users</button>
+  <button data-tab="accounts">Accounts</button>
+  <button data-tab="logs" id="tab-btn-logs" hidden>日志</button>
+  <button data-tab="metrics" id="tab-btn-metrics" hidden>监控</button>
+  <button data-tab="sandboxes" id="tab-btn-sandboxes" hidden>沙箱</button>
+  <!-- 仅 super_admin 可见，JS 控制 hidden -->
+  <button data-tab="config" id="tab-btn-config" hidden>运营商配置</button>
+  <button data-tab="audit" id="tab-btn-audit" hidden>审计日志</button>
+  <button data-tab="backup" id="tab-btn-backup" hidden>备份</button>
+  <button data-tab="admin_keys" id="tab-btn-admin-keys" hidden>子管理员</button>
+</nav>
+
+<main>
+
+  <section id="tab-dashboard" class="tab-content">
+    <div class="card">
+      <h2>Status</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="value" id="s-status">--</div><div class="label">Daemon</div></div>
+        <div class="stat"><div class="value" id="s-users">--</div><div class="label">Users</div></div>
+        <div class="stat"><div class="value" id="s-accounts">--</div><div class="label">Accounts</div></div>
+        <div class="stat"><div class="value" id="s-plugins">--</div><div class="label">Op-installed plugins</div></div>
+      </div>
+    </div>
+    <!-- Phase 5.3: Claude OAuth 健康卡片 -->
+    <div class="card" id="oauth-card">
+      <h2>Claude OAuth Token 状态</h2>
+      <div id="oauth-status" class="oauth-status">
+        <span class="oauth-badge" id="oauth-badge">检查中...</span>
+        <span class="oauth-detail" id="oauth-detail"></span>
+      </div>
+      <p class="small" id="oauth-help" hidden>
+        在 daemon 主机上跑 <code>claude /login</code> 重新走 OAuth 流程拿一对新 token。
+        重新登录后 daemon 会自动 pick up（read-only 的旧 bind-mount 已改为 rw）。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>运营商已安装 Claude 插件 / Skill</h2>
+      <p class="small">
+        这是运营商 host 上 <code>~/.claude/settings.json</code> 里 <code>enabledPlugins</code> 字段的内容。
+        新插件加入这里之后，claude 下次启动时会自动从对应 marketplace 拉取代码到 <code>~/.claude/plugins/cache/</code>。
+        每个 WeChat 用户的 <code>enabledPlugins</code> 不能超过这里的可用集合。
+      </p>
+      <ul class="skill-list" id="schema-list">
+        <li class="empty">Loading...</li>
+      </ul>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn" id="plugin-install-btn">+ 安装新插件</button>
+        <button class="btn secondary" id="plugin-install-recommended-btn"
+          title="pptx + docx + xlsx + pdf 文档处理">⚡ 一键装常用 Anthropic Skills</button>
+        <button class="btn secondary" id="plugin-refresh-btn">刷新</button>
+      </div>
+      <p class="small">推荐组：<code>pptx</code>, <code>docx</code>, <code>xlsx</code>, <code>pdf</code>
+        @<code>anthropic-agent-skills</code> — 覆盖 PowerPoint/Word/Excel/PDF 处理。</p>
+    </div>
+
+    <!-- 备份快捷入口，super_admin 可见 -->
+    <div class="card" id="dashboard-backup-card" hidden>
+      <h2>立即备份</h2>
+      <p class="small">把当前 <code>state.db</code> 通过 <code>VACUUM INTO</code> 在线快照到
+        <code>~/.weclawbot/backups/state-&lt;时间戳&gt;.db</code>。daemon 不需要停。</p>
+      <div class="btn-row">
+        <button class="btn" id="dashboard-backup-btn">立即备份</button>
+        <span class="small" id="dashboard-backup-status"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-defaults" class="tab-content" hidden>
+    <div class="card">
+      <h2>出厂默认设置 — 只在新用户首次接入时生效</h2>
+      <p class="small">
+        新 WeChat 用户首次发来消息时，daemon 会把这套配置复制到他们的个人 <code>settings.json</code>。
+        已存在的用户**不会**自动更新；想推到所有现有用户，点下方"应用到所有现有用户"。
+      </p>
+
+      <!-- 表单视图（默认） -->
+      <div id="defaults-form">
+        <div class="form-row">
+          <label>Claude 模型</label>
+          <select id="df-model" class="form-control">
+            <option value="sonnet">sonnet (推荐，平衡)</option>
+            <option value="opus">opus (最强但慢)</option>
+            <option value="haiku">haiku (最快但能力弱)</option>
+            <option value="">(空 — 让 claude 自己挑)</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label>权限模式 permissionMode</label>
+          <select id="df-permission-mode" class="form-control">
+            <option value="default">default — 默认（敏感工具会提示）</option>
+            <option value="acceptEdits">acceptEdits — 自动接受文件编辑</option>
+            <option value="bypassPermissions">bypassPermissions — 跳过所有权限提示（沙箱里安全）</option>
+            <option value="plan">plan — 只规划不执行</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label>主题 theme</label>
+          <select id="df-theme" class="form-control">
+            <option value="dark">dark</option>
+            <option value="light">light</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label>启用的官方插件 / 技能 (enabledPlugins)</label>
+          <div id="df-plugins" class="checkbox-list">
+            <div class="small">加载中...</div>
+          </div>
+          <p class="small">勾选后这些插件会随新用户初始化。来自 <code>/api/v1/claude/schema</code> 的运营商已安装列表。</p>
+        </div>
+
+        <div class="form-row">
+          <label>环境变量 env（自定义键值对）</label>
+          <div id="df-env" class="kv-list"></div>
+          <button class="btn secondary btn-small" id="df-env-add" type="button">+ 添加一行</button>
+          <p class="small">这些会以 <code>env: {KEY: VALUE}</code> 形式注入到 claude-cli。<strong>不要</strong>在这里放 API key — 已被 BLOCKED_KEYS 拒绝。</p>
+        </div>
+      </div>
+
+      <!-- 高级 JSON 视图（隐藏） -->
+      <div id="defaults-advanced" hidden>
+        <p class="small">直接编辑完整 JSON。提交前 daemon 会校验，错误格式会被拒绝。</p>
+        <textarea id="defaults-json" class="json"></textarea>
+      </div>
+
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn" id="defaults-save">保存默认设置</button>
+        <button class="btn secondary" id="defaults-apply-all">应用到所有现有用户…</button>
+        <button class="btn secondary" id="defaults-toggle-mode">切换到高级 JSON 模式</button>
+        <span class="small" id="defaults-status"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-users" class="tab-content" hidden>
+    <div class="users-shell">
+
+      <!-- Left: searchable user list -->
+      <aside class="users-sidebar">
+        <input class="filter" id="users-filter" type="text"
+               placeholder="按 hash 或 hint 过滤..." />
+        <div id="users-list">
+          <div class="empty">加载中...</div>
+        </div>
+      </aside>
+
+      <!-- Right: detail with sub-tabs -->
+      <div id="user-detail-pane" class="user-detail-pane empty">
+        从左侧选择一个用户查看详情
+      </div>
+
+      <template id="user-detail-template">
+        <div class="user-subtabs">
+          <button class="active" data-sub="overview">概览</button>
+          <button data-sub="settings">设置</button>
+          <button data-sub="history">对话记录</button>
+          <button data-sub="actions">操作</button>
+        </div>
+        <div class="user-subpanel" id="user-subpanel"></div>
+      </template>
+    </div>
+  </section>
+
+  <section id="tab-accounts" class="tab-content" hidden>
+    <div class="card">
+      <h2>WeChat accounts</h2>
+      <div id="accounts-list"><div class="empty">Loading...</div></div>
+      <div class="btn-row">
+        <button class="btn" id="accounts-add">+ 添加账号 (QR 扫码)</button>
+        <button class="btn secondary" id="accounts-refresh">刷新</button>
+      </div>
+      <p class="small" style="margin-top:8px;">
+        点 "添加账号" 会拉取微信端 QR 码，用微信扫码 → 确认登录后自动保存到 state.db。
+      </p>
+    </div>
+  </section>
+
+  <!-- Logs tab（read_write+ 可见） -->
+  <section id="tab-logs" class="tab-content" hidden>
+    <div class="card">
+      <h2>Daemon 日志</h2>
+      <p class="small">来自 <code>~/.weclawbot/logs/weclawbot-&lt;today&gt;.log</code>。日志按本地时间分文件，每次启动会清理 30 天前的旧文件（env <code>WECLAWBOT_LOG_RETENTION_DAYS</code> 可改）。</p>
+      <div class="btn-row" style="margin-bottom:10px;">
+        <select id="logs-lines" class="form-control" style="max-width:140px;">
+          <option value="100">最近 100 行</option>
+          <option value="200" selected>最近 200 行</option>
+          <option value="500">最近 500 行</option>
+          <option value="1000">最近 1000 行</option>
+          <option value="2000">最近 2000 行</option>
+        </select>
+        <button class="btn" id="logs-refresh">刷新</button>
+        <label class="small" style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="logs-auto"> 自动刷新（5s）
+        </label>
+        <span class="small" id="logs-meta"></span>
+      </div>
+      <pre id="logs-view" style="background:#0f172a;border:1px solid #334155;border-radius:6px;
+            padding:12px;font:11px/1.5 ui-monospace,Menlo,monospace;color:#cbd5e1;
+            max-height:65vh;overflow:auto;white-space:pre-wrap;">加载中...</pre>
+    </div>
+  </section>
+
+  <!-- Metrics tab -->
+  <section id="tab-metrics" class="tab-content" hidden>
+    <div class="card">
+      <h2>实时指标 (Prometheus)</h2>
+      <p class="small">直接抓 <code>/metrics</code>。基础指标摘要按类型分组展示，原始数据在底部可折叠区。</p>
+      <div class="btn-row" style="margin-bottom:10px;">
+        <button class="btn" id="metrics-refresh">刷新</button>
+        <label class="small" style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="metrics-auto"> 自动刷新（10s）
+        </label>
+      </div>
+      <div id="metrics-summary"></div>
+      <details style="margin-top:14px;">
+        <summary class="small">完整原始数据 (Prometheus exposition format)</summary>
+        <pre id="metrics-raw" style="background:#0f172a;border:1px solid #334155;border-radius:6px;
+              padding:12px;font:11px/1.5 ui-monospace,Menlo,monospace;color:#cbd5e1;
+              max-height:50vh;overflow:auto;"></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- Sandboxes tab -->
+  <section id="tab-sandboxes" class="tab-content" hidden>
+    <div class="card">
+      <h2>正在运行的沙箱</h2>
+      <p class="small">来自 <code>podman ps --format json</code>。每个 inbound WeChat 消息会临时拉起一个 per-user gVisor 沙箱跑 Claude，完成后退出。健康状态下空表是常态，只在有消息正在处理时才看到 container。</p>
+      <div class="btn-row" style="margin-bottom:10px;">
+        <button class="btn" id="sandboxes-refresh">刷新</button>
+        <label class="small" style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="sandboxes-auto"> 自动刷新（3s）
+        </label>
+      </div>
+      <div id="sandboxes-list"><div class="empty">加载中...</div></div>
+    </div>
+  </section>
+
+  <!-- Config tab (super_admin) -->
+  <section id="tab-config" class="tab-content" hidden>
+    <div class="card">
+      <h2>运营商配置 (热加载)</h2>
+      <p class="small">
+        修改这些字段后保存，<strong>daemon 下条 inbound 消息自动读到新值</strong>，
+        不需要重启。文件路径：<code>~/.weclawbot/config.json</code>。
+        <code>ai.apiKey</code> 显示为掩码 — 保留掩码原样保存 = 不动现有值。
+      </p>
+      <div id="config-form"><div class="empty">加载中...</div></div>
+    </div>
+  </section>
+
+  <!-- Phase 3/7: 审计日志（read_write+ 可见） -->
+  <section id="tab-audit" class="tab-content" hidden>
+    <div class="card">
+      <h2>审计日志</h2>
+      <p class="small">每个 mutating 操作（创建/撤销密钥、改默认设置、删用户、备份、安装插件等）会写一行。401/403 拒绝也记。最近 100 条按时间倒序显示。</p>
+      <div class="btn-row" style="margin-bottom:12px;">
+        <input id="audit-filter-action" type="text" placeholder="按 action 过滤 (e.g. admin_keys.create)"
+          style="flex:1; max-width:380px; padding:6px 10px; background:#0f172a; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font:12px monospace;" />
+        <button class="btn secondary" id="audit-refresh">刷新</button>
+      </div>
+      <div id="audit-list-wrap"><div class="empty">加载中...</div></div>
+    </div>
+  </section>
+
+  <!-- Phase 5: 备份 (super_admin) -->
+  <section id="tab-backup" class="tab-content" hidden>
+    <div class="card">
+      <h2>备份与还原</h2>
+      <p class="small">
+        SQLite <code>VACUUM INTO</code> 产出一个自包含的 <code>.db</code> 文件，daemon 不需要停。
+        建议每天 cron 跑一次，保留 30 天滚动副本（见 <code>OPERATIONS.md §4.2</code>）。
+        还原必须在 daemon 停了的状态下用 <code>weclawbot restore &lt;snapshot&gt;</code> 命令。
+      </p>
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn" id="backup-create-btn">立即创建快照</button>
+        <button class="btn secondary" id="backup-refresh-btn">刷新列表</button>
+      </div>
+      <p class="small" id="backup-status"></p>
+      <div id="backup-list-wrap"><div class="empty">加载中...</div></div>
+    </div>
+  </section>
+
+  <!-- Phase 7: 管理员密钥管理（仅 super_admin 可见） -->
+  <section id="tab-admin_keys" class="tab-content" hidden>
+    <div class="card">
+      <h2>管理员 API 密钥</h2>
+      <p class="small">
+        每个子管理员需要一把自己的密钥。密钥**仅在创建时显示明文一次**，必须当场抄下保管。撤销是软删除（保留审计历史）。
+        角色：<code>super_admin</code> = 可以管理密钥/做备份/全部读写；<code>read_write</code> = 用户/账号/默认设置读写；<code>read_only</code> = 只读。
+      </p>
+      <div id="keys-list-wrap"><div class="empty">加载中...</div></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn" id="keys-create-btn">+ 创建子管理员</button>
+        <button class="btn secondary" id="keys-refresh">刷新</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="footer">weclawbot · WeChat ⇄ Claude Code bridge · gVisor-sandboxed per user</div>
+
+<script>
+const API = '';
+
+const tabs = {
+  dashboard:   () => loadDashboard(),
+  defaults:    () => loadDefaults(),
+  users:       () => loadUsers(),
+  accounts:    () => loadAccounts(),
+  admin_keys:  () => loadAdminKeys(),
+  audit:       () => loadAudit(),
+  backup:      () => loadBackupList(),
+  config:      () => loadSysConfig(),
+  logs:        () => loadLogs(),
+  metrics:     () => loadMetrics(),
+  sandboxes:   () => loadSandboxes(),
+};
+
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-content').forEach(s => s.hidden = (s.id !== `tab-${tab}`));
+    if (tabs[tab]) tabs[tab]();
+  });
+});
+
+// --- Phase 3/7: admin-key auth ------------------------------------------
+// `/api/v1/...` require `Authorization: Bearer weclawbot_…`. The token
+// is kept in localStorage so the operator enters it once per browser.
+// `currentAdmin` caches the verified context (key_id / key_name / role)
+// for UI gating (e.g. only super_admin sees the Admin Keys tab).
+const TOKEN_KEY = 'weclawbot_admin_token';
+let currentAdmin = null;
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(v) { localStorage.setItem(TOKEN_KEY, v.trim()); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + getToken(),
+    },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  if (r.status === 401) {
+    // Token went bad mid-session — drop it and bounce back to login.
+    clearToken();
+    currentAdmin = null;
+    showLogin({ message: '登录已过期，请重新粘贴 API 密钥。', tone: 'warn' });
+    throw new Error('unauthorized');
+  }
+  if (r.status === 403) {
+    alert('该操作需要更高权限（你当前的角色不允许）。');
+    throw new Error('forbidden');
+  }
+  return r.json();
+}
+
+// Show the login overlay. `opts.message` overrides the default prompt;
+// `opts.tone` is one of 'info' | 'warn' | 'error'.
+function showLogin(opts) {
+  opts = opts || {};
+  let host = document.getElementById('login-overlay');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'login-overlay';
+    host.className = 'modal-backdrop';
+    host.innerHTML = `
+      <div class="modal-card">
+        <h2>管理员登录</h2>
+        <p class="modal-sub" id="login-msg">请粘贴管理员 API 密钥。</p>
+        <input id="login-input" class="modal-input" type="password"
+          placeholder="weclawbot_..." autocomplete="off" />
+        <p class="small" style="margin:10px 0 0;color:#64748b;">
+          首次启动时 daemon 会在 stderr 打印 INITIAL-ADMIN-KEY，并写入
+          <code>~/.weclawbot/INITIAL-ADMIN-KEY.txt</code> (mode 0600)。
+        </p>
+        <div class="modal-actions">
+          <button id="login-submit" class="btn">登录</button>
+        </div>
+      </div>`;
+    document.body.appendChild(host);
+    const submit = async () => {
+      const msg = document.getElementById('login-msg');
+      msg.className = 'modal-sub';
+      const val = document.getElementById('login-input').value.trim();
+      if (!val.startsWith('weclawbot_')) {
+        msg.textContent = '密钥格式不对，应该是 weclawbot_xxx_yyy 这种形式。';
+        msg.className = 'modal-sub';
+        msg.style.color = '#fca5a5';
+        return;
+      }
+      // Verify before saving so a bad key doesn't poison localStorage.
+      const r = await fetch(API + '/api/v1/auth/me',
+        { headers: { 'Authorization': 'Bearer ' + val } });
+      if (r.status === 200) {
+        setToken(val);
+        host.remove();
+        await bootstrap();
+      } else {
+        msg.textContent = '密钥无效。请确认从 INITIAL-ADMIN-KEY.txt 完整复制了 70 字符。';
+        msg.style.color = '#fca5a5';
+      }
+    };
+    document.getElementById('login-submit').addEventListener('click', submit);
+    document.getElementById('login-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submit();
+    });
+  }
+  const msg = document.getElementById('login-msg');
+  msg.textContent = opts.message || '请粘贴管理员 API 密钥。';
+  msg.style.color = opts.tone === 'warn' ? '#fbbf24' : (opts.tone === 'error' ? '#fca5a5' : '#94a3b8');
+  setTimeout(() => document.getElementById('login-input').focus(), 50);
+}
+
+// Bootstrap the page: verify token before touching anything. Failure
+// modes lead to login overlay rather than throwing in dashboard fetches.
+async function bootstrap() {
+  if (!getToken()) {
+    showLogin({});
+    return;
+  }
+  try {
+    const r = await fetch(API + '/api/v1/auth/me',
+      { headers: { 'Authorization': 'Bearer ' + getToken() } });
+    if (r.status !== 200) {
+      clearToken();
+      showLogin({ message: '保存的密钥已无效，请重新登录。', tone: 'warn' });
+      return;
+    }
+    currentAdmin = await r.json();
+  } catch (e) {
+    showLogin({ message: '无法连接 daemon：' + e, tone: 'error' });
+    return;
+  }
+  // Render admin-info header.
+  const info = document.getElementById('admin-info');
+  info.hidden = false;
+  document.getElementById('admin-who').textContent = currentAdmin.key_name;
+  const pill = document.getElementById('admin-role-pill');
+  pill.textContent = currentAdmin.role;
+  pill.classList.toggle('super', currentAdmin.role === 'super_admin');
+  // 角色-tab 显隐
+  if (currentAdmin.role === 'super_admin') {
+    document.getElementById('tab-btn-admin-keys').hidden = false;
+    document.getElementById('tab-btn-backup').hidden = false;
+    document.getElementById('tab-btn-config').hidden = false;
+    document.getElementById('dashboard-backup-card').hidden = false;
+  }
+  // read_write 及以上看 audit / logs / metrics / sandboxes
+  if (currentAdmin.role === 'super_admin' || currentAdmin.role === 'read_write') {
+    document.getElementById('tab-btn-audit').hidden = false;
+    document.getElementById('tab-btn-logs').hidden = false;
+    document.getElementById('tab-btn-metrics').hidden = false;
+    document.getElementById('tab-btn-sandboxes').hidden = false;
+  }
+  // Logout wiring.
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    if (!confirm('退出登录？')) return;
+    clearToken();
+    currentAdmin = null;
+    location.reload();
+  });
+  // Now safe to fire the dashboard.
+  loadDashboard();
+  setInterval(loadDashboard, 30_000);
+}
+
+// -------- header / dashboard --------
+async function loadDashboard() {
+  try {
+    // /api/health 是无认证 legacy 端点（返回 pid + accounts 计数）；
+    // /healthz 是深度健康检查（无认证）。两个都不走 /api/v1/。
+    // 其余受保护接口走 v1 + Bearer。
+    const [hRaw, hzRaw, u, a, opPlugins] = await Promise.all([
+      fetch('/api/health').then(r => r.json()).catch(() => ({})),
+      fetch('/healthz').then(r => r.json()).catch(() => ({})),
+      api('GET', '/api/v1/users'),
+      api('GET', '/api/v1/accounts'),
+      api('GET', '/api/v1/operator/plugins'),
+    ]);
+    const h = Object.assign({}, hRaw, hzRaw);
+    document.getElementById('version').textContent = h.version || '?';
+    document.getElementById('pid').textContent = h.pid || '?';
+    const pill = document.getElementById('status-pill');
+    pill.textContent = h.ok ? 'running' : 'down';
+    pill.classList.toggle('down', !h.ok);
+    document.getElementById('s-status').textContent = h.ok ? 'OK' : 'ERR';
+    document.getElementById('s-users').textContent = (u.users || []).length;
+    document.getElementById('users-count').textContent = (u.users || []).length;
+    document.getElementById('s-accounts').textContent = (a.accounts || []).length;
+    document.getElementById('accounts-count').textContent = (a.accounts || []).length;
+
+    const enabled = opPlugins.enabledPlugins || [];
+    document.getElementById('s-plugins').textContent = enabled.length;
+    renderOperatorPluginsList(enabled);
+
+    // Phase 5.3: Claude OAuth 状态从 /healthz 拿
+    renderOauthStatus(h && h.checks ? h.checks : {});
+  } catch (e) {
+    document.getElementById('status-pill').textContent = 'error';
+    document.getElementById('status-pill').classList.add('down');
+  }
+}
+
+function renderOauthStatus(checks) {
+  const secs = checks.claude_oauth_expires_in_seconds;
+  const state = checks.claude_oauth;
+  const badge = document.getElementById('oauth-badge');
+  const detail = document.getElementById('oauth-detail');
+  const help = document.getElementById('oauth-help');
+  if (typeof secs !== 'number' || state === 'unknown' || state === undefined) {
+    badge.textContent = '未配置';
+    badge.className = 'oauth-badge unknown';
+    detail.textContent = '~/.claude/.credentials.json 不存在或无 claudeAiOauth 段';
+    help.hidden = true;
+    return;
+  }
+  const fmt = (s) => {
+    const abs = Math.abs(s);
+    const d = Math.floor(abs / 86400);
+    const h = Math.floor((abs % 86400) / 3600);
+    const m = Math.floor((abs % 3600) / 60);
+    if (d > 0) return `${d}天 ${h}小时`;
+    if (h > 0) return `${h}小时 ${m}分钟`;
+    return `${m}分钟`;
+  };
+  if (secs < 0) {
+    badge.textContent = '已过期';
+    badge.className = 'oauth-badge expired';
+    detail.textContent = `过期 ${fmt(secs)}前 — sandbox 内 claude 会 401`;
+    help.hidden = false;
+  } else if (secs < 3600) {
+    badge.textContent = '即将过期';
+    badge.className = 'oauth-badge urgent';
+    detail.textContent = `还剩 ${fmt(secs)} — 请立刻 re-login`;
+    help.hidden = false;
+  } else if (secs < 24 * 3600) {
+    badge.textContent = '警告 (24h 内)';
+    badge.className = 'oauth-badge warn';
+    detail.textContent = `还剩 ${fmt(secs)} — 计划近期 re-login`;
+    help.hidden = false;
+  } else {
+    badge.textContent = '正常';
+    badge.className = 'oauth-badge ok';
+    detail.textContent = `还剩 ${fmt(secs)}`;
+    help.hidden = true;
+  }
+}
+
+function renderOperatorPluginsList(plugins) {
+  const list = document.getElementById('schema-list');
+  if (!plugins.length) {
+    list.innerHTML = `<li class="empty">还没安装任何插件。点下面 "<strong>+ 安装新插件</strong>"
+      添加，例如 <code>pptx@anthropic-agent-skills</code>。</li>`;
+    return;
+  }
+  list.innerHTML = plugins.map(spec => {
+    const s = typeof spec === 'string' ? spec : (spec.plugin || JSON.stringify(spec));
+    return `<li style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+      <code style="flex:1;">${esc(s)}</code>
+      <button class="btn-revoke" data-spec="${esc(s)}" type="button">卸载</button>
+    </li>`;
+  }).join('');
+  list.querySelectorAll('.btn-revoke').forEach(b => {
+    b.addEventListener('click', async () => {
+      const s = b.dataset.spec;
+      if (!confirm(`卸载插件 "${s}"？该操作把它从 ~/.claude/settings.json 移除。`)) return;
+      const r = await api('DELETE', '/api/v1/operator/plugins/' + encodeURIComponent(s));
+      if (!r.ok) alert('卸载失败: ' + (r.error || r.detail || '?'));
+      loadDashboard();
+    });
+  });
+}
+
+document.getElementById('plugin-refresh-btn').addEventListener('click', loadDashboard);
+document.getElementById('plugin-install-btn').addEventListener('click', showInstallPluginModal);
+document.getElementById('plugin-install-recommended-btn').addEventListener('click', async () => {
+  const recommended = [
+    'pptx@anthropic-agent-skills',
+    'docx@anthropic-agent-skills',
+    'xlsx@anthropic-agent-skills',
+    'pdf@anthropic-agent-skills',
+  ];
+  if (!confirm('安装这 4 个 Anthropic 官方文档处理 skill？\n\n' + recommended.join('\n'))) return;
+  let installed = 0, skipped = 0, failed = [];
+  for (const spec of recommended) {
+    const r = await api('POST', '/api/v1/operator/plugins', { spec });
+    if (r.ok) {
+      if (r.already) skipped++;
+      else installed++;
+    } else {
+      failed.push(spec);
+    }
+  }
+  let msg = `✓ 新安装 ${installed} 个`;
+  if (skipped) msg += `，跳过 ${skipped} 个（已存在）`;
+  if (failed.length) msg += `\n失败: ` + failed.join(', ');
+  alert(msg);
+  loadDashboard();
+});
+document.getElementById('dashboard-backup-btn').addEventListener('click', async () => {
+  const st = document.getElementById('dashboard-backup-status');
+  st.textContent = '备份中...';
+  const r = await api('POST', '/api/v1/admin/backup');
+  if (r.ok) {
+    st.textContent = `✓ 已写入 ${r.path}（${Math.round((r.size_bytes||0)/1024)} KB）`;
+  } else {
+    st.textContent = '失败: ' + (r.detail || r.error || '?');
+  }
+});
+
+function showInstallPluginModal() {
+  openModal(`
+    <h2>安装新 Claude 插件</h2>
+    <p class="modal-sub">输入 <code>name@marketplace</code> 格式的标识，例如
+      <code>pptx@anthropic-agent-skills</code>、<code>document-skills@anthropic-agent-skills</code>。
+      添加后 claude 下次启动时会自动从 marketplace 拉取代码。
+    </p>
+    <input id="install-plugin-spec" class="modal-input" type="text"
+      placeholder="pptx@anthropic-agent-skills" autocomplete="off" />
+    <p class="small" style="margin:10px 0 0;color:#94a3b8;">
+      常用选择：
+      <code>pptx@anthropic-agent-skills</code>,
+      <code>docx@anthropic-agent-skills</code>,
+      <code>xlsx@anthropic-agent-skills</code>,
+      <code>pdf@anthropic-agent-skills</code>
+    </p>
+    <p class="modal-msg" id="install-plugin-msg"></p>
+    <div class="modal-actions">
+      <button class="btn secondary" id="install-plugin-cancel">取消</button>
+      <button class="btn" id="install-plugin-submit">安装</button>
+    </div>`);
+  document.getElementById('install-plugin-cancel').addEventListener('click', closeModal);
+  document.getElementById('install-plugin-submit').addEventListener('click', async () => {
+    const spec = document.getElementById('install-plugin-spec').value.trim();
+    const msg = document.getElementById('install-plugin-msg');
+    if (!spec.includes('@')) {
+      msg.className = 'modal-msg error';
+      msg.textContent = '格式不对，应为 name@marketplace。';
+      return;
+    }
+    msg.className = 'modal-msg';
+    msg.textContent = '安装中...';
+    const r = await api('POST', '/api/v1/operator/plugins', { spec });
+    if (r.ok) {
+      msg.className = 'modal-msg success';
+      msg.textContent = r.already ? '已在列表中，无需重复添加。' : '✓ 已加入。' + (r.note || '');
+      setTimeout(() => { closeModal(); loadDashboard(); }, 1500);
+    } else {
+      msg.className = 'modal-msg error';
+      msg.textContent = '失败: ' + (r.detail || r.error || '?');
+    }
+  });
+  setTimeout(() => document.getElementById('install-plugin-spec').focus(), 50);
+}
+
+// -------- defaults (Phase 7: form-driven, JSON is "advanced mode") -----
+//
+// We render the well-known fields as native form controls (select /
+// checkboxes / kv pairs) and stash any extra fields in `unknownExtras`
+// so they round-trip across save without being dropped. Advanced
+// operators can flip into JSON mode to edit anything not on the form.
+
+let defaultsAdvanced = false;     // 是否在高级 JSON 模式
+let unknownExtras = {};           // 表单不认识的字段，保存时合并回去
+let schemaPlugins = [];           // 来自 /api/v1/claude/schema 的可勾选插件列表
+
+async function loadDefaults() {
+  // Pull current defaults + operator-installed plugins (the "可勾选"
+  // universe). Both endpoints require auth; bootstrap() has already
+  // validated the token at this point.
+  const [r, op] = await Promise.all([
+    api('GET', '/api/v1/defaults'),
+    api('GET', '/api/v1/operator/plugins'),
+  ]);
+  const s = r.settings || {};
+  schemaPlugins = (op && op.enabledPlugins) ? op.enabledPlugins : [];
+
+  // Sequester unknown fields (anything not on the form).
+  const known = new Set(['model', 'permissionMode', 'theme',
+                          'enabledPlugins', 'allowedTools',
+                          'disallowedTools', 'env', '_weclawbotManaged']);
+  unknownExtras = {};
+  Object.keys(s).forEach(k => {
+    if (!known.has(k)) unknownExtras[k] = s[k];
+  });
+
+  // Form fields
+  setSelectValue('df-model', s.model || 'sonnet');
+  setSelectValue('df-permission-mode', s.permissionMode || 'default');
+  setSelectValue('df-theme', s.theme || 'dark');
+  renderPluginsCheckboxes(s.enabledPlugins || []);
+  renderEnvKvList(s.env || {});
+
+  // Also seed the JSON textarea so toggling to advanced works without re-fetch.
+  document.getElementById('defaults-json').value = JSON.stringify(s, null, 2);
+  document.getElementById('defaults-status').textContent = '';
+}
+
+function setSelectValue(id, val) {
+  const sel = document.getElementById(id);
+  // Some values may not be in the option list (e.g. custom model name).
+  // If absent, add a transient option so the form doesn't silently swallow
+  // the existing value.
+  if (![...sel.options].some(o => o.value === val)) {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = val + ' (自定义)';
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+}
+
+function renderPluginsCheckboxes(enabled) {
+  const host = document.getElementById('df-plugins');
+  if (!schemaPlugins.length) {
+    host.innerHTML = '<div class="empty">运营商还没安装任何 claude 插件 (claude /plugin install ...)</div>';
+    return;
+  }
+  const enabledSet = new Set(enabled);
+  host.innerHTML = schemaPlugins.map(p => {
+    const id = typeof p === 'string' ? p : (p.id || p.name || JSON.stringify(p));
+    return `<label><input type="checkbox" data-plugin="${esc(id)}" ${enabledSet.has(id) ? 'checked' : ''}>${esc(id)}</label>`;
+  }).join('');
+}
+
+function renderEnvKvList(envObj) {
+  const host = document.getElementById('df-env');
+  const entries = Object.entries(envObj || {});
+  if (entries.length === 0) {
+    host.innerHTML = '<div class="small" style="color:#64748b;">未设置任何环境变量</div>';
+    return;
+  }
+  host.innerHTML = entries.map(([k, v]) => kvRowHtml(k, v)).join('');
+  bindKvRemove(host);
+}
+
+function kvRowHtml(k, v) {
+  return `<div class="kv-row">
+    <input class="kv-key" type="text" placeholder="KEY" value="${esc(k)}" />
+    <input class="kv-val" type="text" placeholder="value" value="${esc(v)}" />
+    <button class="remove-btn" type="button">删除</button>
+  </div>`;
+}
+
+function bindKvRemove(host) {
+  host.querySelectorAll('.remove-btn').forEach(b => {
+    b.addEventListener('click', () => b.closest('.kv-row').remove());
+  });
+}
+
+document.getElementById('df-env-add').addEventListener('click', () => {
+  const host = document.getElementById('df-env');
+  // If the placeholder "未设置" is showing, clear it first.
+  if (host.querySelector('.small')) host.innerHTML = '';
+  host.insertAdjacentHTML('beforeend', kvRowHtml('', ''));
+  bindKvRemove(host);
+});
+
+document.getElementById('defaults-toggle-mode').addEventListener('click', () => {
+  defaultsAdvanced = !defaultsAdvanced;
+  document.getElementById('defaults-form').hidden = defaultsAdvanced;
+  document.getElementById('defaults-advanced').hidden = !defaultsAdvanced;
+  document.getElementById('defaults-toggle-mode').textContent =
+    defaultsAdvanced ? '切换到表单模式' : '切换到高级 JSON 模式';
+  // Sync content between views so toggling never loses edits.
+  if (defaultsAdvanced) {
+    // form → JSON
+    document.getElementById('defaults-json').value =
+      JSON.stringify(buildSettingsFromForm(), null, 2);
+  } else {
+    // JSON → form (only if parsable)
+    try {
+      const obj = JSON.parse(document.getElementById('defaults-json').value);
+      const known = new Set(['model','permissionMode','theme','enabledPlugins',
+                              'allowedTools','disallowedTools','env','_weclawbotManaged']);
+      unknownExtras = {};
+      Object.keys(obj).forEach(k => { if (!known.has(k)) unknownExtras[k] = obj[k]; });
+      setSelectValue('df-model', obj.model || 'sonnet');
+      setSelectValue('df-permission-mode', obj.permissionMode || 'default');
+      setSelectValue('df-theme', obj.theme || 'dark');
+      renderPluginsCheckboxes(obj.enabledPlugins || []);
+      renderEnvKvList(obj.env || {});
+    } catch (e) {
+      alert('当前 JSON 无法解析，已保留原文：' + e.message);
+    }
+  }
+});
+
+function buildSettingsFromForm() {
+  const enabled = [...document.querySelectorAll('#df-plugins input[type=checkbox]:checked')]
+                    .map(cb => cb.dataset.plugin);
+  const envObj = {};
+  document.querySelectorAll('#df-env .kv-row').forEach(row => {
+    const k = row.querySelector('.kv-key').value.trim();
+    const v = row.querySelector('.kv-val').value;
+    if (k) envObj[k] = v;
+  });
+  return Object.assign({}, unknownExtras, {
+    _weclawbotManaged: true,
+    model: document.getElementById('df-model').value,
+    permissionMode: document.getElementById('df-permission-mode').value,
+    theme: document.getElementById('df-theme').value,
+    enabledPlugins: enabled,
+    // allowedTools/disallowedTools 字段表单上没暴露 —— 走 advanced 模式编辑
+    allowedTools: unknownExtras.allowedTools || [],
+    disallowedTools: unknownExtras.disallowedTools || [],
+    env: envObj,
+  });
+}
+
+document.getElementById('defaults-save').addEventListener('click', async () => {
+  let settings;
+  if (defaultsAdvanced) {
+    try {
+      settings = JSON.parse(document.getElementById('defaults-json').value);
+    } catch (e) {
+      document.getElementById('defaults-status').textContent = 'JSON 解析失败: ' + e.message;
+      return;
+    }
+  } else {
+    settings = buildSettingsFromForm();
+  }
+  const r = await api('PUT', '/api/v1/defaults', { settings });
+  document.getElementById('defaults-status').textContent =
+    r.ok ? '✓ 已保存。新用户首次接入会拿到这套配置。' : ('错误: ' + (r.error || '?'));
+});
+
+document.getElementById('defaults-apply-all').addEventListener('click', async () => {
+  if (!confirm('用当前默认设置覆盖**所有**现有用户的个人 settings？\n\n这是不可撤销的（用户自己改过的会丢）。')) return;
+  const r = await api('POST', '/api/v1/defaults/apply', {});
+  const n = (r.applied || []).length;
+  document.getElementById('defaults-status').textContent =
+    `✓ 已应用到 ${n} 个用户。后台正在 reconcile 插件...`;
+  // 刷新用户列表让 sync_state 变化可见
+  setTimeout(() => { if (cachedUsers && cachedUsers.length) loadUsers(); }, 1200);
+});
+
+// -------- users (master/detail) --------
+let currentUserHash = null;
+let currentSubTab = 'overview';
+let cachedUsers = [];
+let userFilter = '';
+
+function syncBadge(sync) {
+  const map = { synced: 'badge-ok', syncing: 'badge-info',
+                out_of_sync: 'badge-warn' };
+  return map[sync] || 'badge-warn';
+}
+
+function renderUsersList() {
+  const list = document.getElementById('users-list');
+  const filter = userFilter.toLowerCase();
+  const filtered = cachedUsers.filter(u => {
+    const p = u.profile || {};
+    return !filter
+        || u.hash.toLowerCase().includes(filter)
+        || (p.user_id_hint || '').toLowerCase().includes(filter);
+  });
+  if (filtered.length === 0) {
+    list.innerHTML = `<div class="empty">${cachedUsers.length === 0 ? '暂无用户' : '没有匹配的用户'}</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map(u => {
+    const p = u.profile || {};
+    const sync = p.sync_state || 'unknown';
+    const selected = u.hash === currentUserHash ? 'selected' : '';
+    return `<div class="user-card ${selected}" data-hash="${esc(u.hash)}">
+      <div class="row1">
+        <span class="name">${esc(p.user_id_hint || u.hash)}</span>
+        <span class="msgs">${p.message_count || 0}</span>
+      </div>
+      <div class="row2">
+        <span class="badge ${syncBadge(sync)}">${esc(sync)}</span>
+        <span>${esc((p.last_seen || '').slice(0, 10) || 'never')}</span>
+      </div>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.user-card').forEach(card => {
+    card.addEventListener('click', () => selectUser(card.dataset.hash));
+  });
+}
+
+async function loadUsers() {
+  const r = await api('GET', '/api/v1/users');
+  cachedUsers = r.users || [];
+  renderUsersList();
+}
+
+document.getElementById('users-filter').addEventListener('input', e => {
+  userFilter = e.target.value;
+  renderUsersList();
+});
+
+async function selectUser(hash) {
+  currentUserHash = hash;
+  renderUsersList(); // re-highlight the selected card
+
+  const pane = document.getElementById('user-detail-pane');
+  const tmpl = document.getElementById('user-detail-template');
+  pane.classList.remove('empty');
+  pane.innerHTML = '';
+  pane.appendChild(tmpl.content.cloneNode(true));
+
+  // Wire sub-tab switching
+  pane.querySelectorAll('.user-subtabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      pane.querySelectorAll('.user-subtabs button')
+          .forEach(b => b.classList.toggle('active', b === btn));
+      currentSubTab = btn.dataset.sub;
+      renderSubTab();
+    });
+  });
+
+  currentSubTab = 'overview';
+  renderSubTab();
+}
+
+async function renderSubTab() {
+  const panel = document.getElementById('user-subpanel');
+  if (!panel || !currentUserHash) return;
+  panel.innerHTML = '<div class="empty">加载中...</div>';
+
+  switch (currentSubTab) {
+    case 'overview':  await renderOverview(panel); break;
+    case 'settings':  await renderSettings(panel); break;
+    case 'history':   await renderHistory(panel);  break;
+    case 'actions':   renderActions(panel);        break;
+  }
+}
+
+async function renderOverview(panel) {
+  const u = cachedUsers.find(x => x.hash === currentUserHash) || {};
+  const p = u.profile || {};
+  panel.innerHTML = `
+    <dl class="ov-grid">
+      <dt>Hash</dt><dd><code>${esc(currentUserHash)}</code></dd>
+      <dt>用户标识</dt><dd>${esc(p.user_id_hint || '(unknown)')}</dd>
+      <dt>消息数</dt><dd>${p.message_count || 0}</dd>
+      <dt>首次见到</dt><dd>${esc(p.created_at || '?')}</dd>
+      <dt>最后活跃</dt><dd>${esc(p.last_seen || '?')}</dd>
+      <dt>沙箱同步状态</dt><dd><span class="badge ${syncBadge(p.sync_state)}">${esc(p.sync_state || 'unknown')}</span></dd>
+      <dt>上次同步</dt><dd>${esc(p.last_sync_at || 'never')}</dd>
+      <dt>上次同步错误</dt><dd>${esc(p.last_sync_error || '(none)')}</dd>
+    </dl>`;
+}
+
+// 用户的 settings 跟 Defaults 形状一样（claude-cli settings.json），
+// 所以用同一套表单组件渲染。差别只在数据源（GET /users/{h}/settings
+// vs GET /defaults）和保存目标 URL。
+async function renderSettings(panel) {
+  const [s, op] = await Promise.all([
+    api('GET', `/api/v1/users/${encodeURIComponent(currentUserHash)}/settings`),
+    api('GET', '/api/v1/operator/plugins'),
+  ]);
+  const settings = s.settings || {};
+  const availablePlugins = (op && op.enabledPlugins) ? op.enabledPlugins : [];
+
+  // 表单 + 高级 JSON 双模式
+  panel.innerHTML = `
+    <div id="us-form">
+      <div class="form-row">
+        <label>Claude 模型</label>
+        <select id="us-model" class="form-control">
+          <option value="sonnet">sonnet</option>
+          <option value="opus">opus</option>
+          <option value="haiku">haiku</option>
+          <option value="">(空 — 使用默认)</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>权限模式</label>
+        <select id="us-permission-mode" class="form-control">
+          <option value="default">default</option>
+          <option value="acceptEdits">acceptEdits</option>
+          <option value="bypassPermissions">bypassPermissions</option>
+          <option value="plan">plan</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>主题</label>
+        <select id="us-theme" class="form-control">
+          <option value="dark">dark</option>
+          <option value="light">light</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>启用的插件（不能超过运营商已安装的集合）</label>
+        <div id="us-plugins" class="checkbox-list"></div>
+        <p class="small">取消勾选 → 保存后 reconcile 会从该用户沙箱里卸载相应插件。</p>
+      </div>
+      <div class="form-row">
+        <label>环境变量 env</label>
+        <div id="us-env" class="kv-list"></div>
+        <button class="btn secondary btn-small" id="us-env-add" type="button">+ 添加一行</button>
+      </div>
+    </div>
+    <div id="us-advanced" hidden>
+      <p class="small">直接编辑完整 JSON。包含表单未暴露的字段（allowedTools / disallowedTools / hooks / 自定义键等）。</p>
+      <textarea id="us-json" class="json"></textarea>
+    </div>
+    <div class="btn-row" style="margin-top:14px;">
+      <button class="btn" id="us-save">保存</button>
+      <button class="btn secondary" id="us-toggle-mode">切换到高级 JSON 模式</button>
+      <span class="small" id="us-status"></span>
+    </div>`;
+
+  // 渲染数据
+  const known = new Set(['model','permissionMode','theme','enabledPlugins',
+                          'allowedTools','disallowedTools','env','_weclawbotManaged']);
+  let userExtras = {};
+  Object.keys(settings).forEach(k => { if (!known.has(k)) userExtras[k] = settings[k]; });
+
+  setSelectValueGeneric(panel.querySelector('#us-model'), settings.model || 'sonnet');
+  setSelectValueGeneric(panel.querySelector('#us-permission-mode'), settings.permissionMode || 'default');
+  setSelectValueGeneric(panel.querySelector('#us-theme'), settings.theme || 'dark');
+  renderUserPlugins(panel, availablePlugins, settings.enabledPlugins || []);
+  renderUserEnv(panel, settings.env || {});
+  panel.querySelector('#us-json').value = JSON.stringify(settings, null, 2);
+
+  // wire "添加 env 行"
+  panel.querySelector('#us-env-add').addEventListener('click', () => {
+    const host = panel.querySelector('#us-env');
+    if (host.querySelector('.small')) host.innerHTML = '';
+    host.insertAdjacentHTML('beforeend', kvRowHtml('', ''));
+    host.querySelectorAll('.remove-btn').forEach(b => {
+      b.onclick = () => b.closest('.kv-row').remove();
+    });
+  });
+
+  // mode toggle
+  let advanced = false;
+  panel.querySelector('#us-toggle-mode').addEventListener('click', () => {
+    advanced = !advanced;
+    panel.querySelector('#us-form').hidden = advanced;
+    panel.querySelector('#us-advanced').hidden = !advanced;
+    panel.querySelector('#us-toggle-mode').textContent =
+      advanced ? '切换到表单模式' : '切换到高级 JSON 模式';
+    if (advanced) {
+      panel.querySelector('#us-json').value =
+        JSON.stringify(buildUserSettings(panel, userExtras), null, 2);
+    } else {
+      try {
+        const obj = JSON.parse(panel.querySelector('#us-json').value);
+        userExtras = {};
+        Object.keys(obj).forEach(k => { if (!known.has(k)) userExtras[k] = obj[k]; });
+        setSelectValueGeneric(panel.querySelector('#us-model'), obj.model || 'sonnet');
+        setSelectValueGeneric(panel.querySelector('#us-permission-mode'), obj.permissionMode || 'default');
+        setSelectValueGeneric(panel.querySelector('#us-theme'), obj.theme || 'dark');
+        renderUserPlugins(panel, availablePlugins, obj.enabledPlugins || []);
+        renderUserEnv(panel, obj.env || {});
+      } catch (e) { alert('JSON 解析失败：' + e.message); }
+    }
+  });
+
+  // save
+  panel.querySelector('#us-save').addEventListener('click', async () => {
+    let payload;
+    if (advanced) {
+      try { payload = JSON.parse(panel.querySelector('#us-json').value); }
+      catch (e) {
+        panel.querySelector('#us-status').textContent = 'JSON 解析失败: ' + e.message;
+        return;
+      }
+    } else {
+      payload = buildUserSettings(panel, userExtras);
+    }
+    const r2 = await api('PUT',
+      `/api/v1/users/${encodeURIComponent(currentUserHash)}/settings`,
+      { settings: payload });
+    panel.querySelector('#us-status').textContent = r2.ok
+      ? (r2.syncing ? '✓ 已保存，后台正在 reconcile 插件...' : '✓ 已保存。')
+      : '错误: ' + (r2.error || '?');
+    setTimeout(loadUsers, 1500);
+  });
+}
+
+function setSelectValueGeneric(sel, val) {
+  if (![...sel.options].some(o => o.value === val)) {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = val + ' (自定义)';
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+}
+
+function renderUserPlugins(panel, available, enabled) {
+  const host = panel.querySelector('#us-plugins');
+  if (!available.length) {
+    host.innerHTML = '<div class="empty">运营商还没安装任何插件 — 去 Dashboard 添加</div>';
+    return;
+  }
+  const set = new Set(enabled.map(e => typeof e === 'string' ? e : (e.plugin || '')));
+  host.innerHTML = available.map(p => {
+    const id = typeof p === 'string' ? p : (p.plugin || JSON.stringify(p));
+    return `<label><input type="checkbox" data-plugin="${esc(id)}" ${set.has(id) ? 'checked' : ''}>${esc(id)}</label>`;
+  }).join('');
+}
+
+function renderUserEnv(panel, envObj) {
+  const host = panel.querySelector('#us-env');
+  const entries = Object.entries(envObj || {});
+  if (!entries.length) {
+    host.innerHTML = '<div class="small" style="color:#64748b;">未设置任何环境变量</div>';
+    return;
+  }
+  host.innerHTML = entries.map(([k, v]) => kvRowHtml(k, v)).join('');
+  host.querySelectorAll('.remove-btn').forEach(b => {
+    b.onclick = () => b.closest('.kv-row').remove();
+  });
+}
+
+function buildUserSettings(panel, extras) {
+  const enabled = [...panel.querySelectorAll('#us-plugins input[type=checkbox]:checked')]
+                    .map(cb => cb.dataset.plugin);
+  const envObj = {};
+  panel.querySelectorAll('#us-env .kv-row').forEach(row => {
+    const k = row.querySelector('.kv-key').value.trim();
+    const v = row.querySelector('.kv-val').value;
+    if (k) envObj[k] = v;
+  });
+  return Object.assign({}, extras, {
+    _weclawbotManaged: true,
+    model: panel.querySelector('#us-model').value,
+    permissionMode: panel.querySelector('#us-permission-mode').value,
+    theme: panel.querySelector('#us-theme').value,
+    enabledPlugins: enabled,
+    allowedTools: extras.allowedTools || [],
+    disallowedTools: extras.disallowedTools || [],
+    env: envObj,
+  });
+}
+
+async function renderHistory(panel) {
+  const r = await api('GET', `/api/v1/users/${encodeURIComponent(currentUserHash)}/history`);
+  const turns = r.turns || [];
+  if (turns.length === 0) {
+    panel.innerHTML = `<div class="empty">该用户暂无对话记录</div>`;
+    return;
+  }
+  panel.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <span class="small">共 ${turns.length} 轮（按时间从旧到新）</span>
+      <button class="btn danger" id="history-clear">清空对话记录</button>
+    </div>
+    <div class="chat-log" id="chat-log"></div>`;
+  const log = panel.querySelector('#chat-log');
+  log.innerHTML = turns.map((t, i) => {
+    const role = t.role === 'user' ? 'user' : 'assistant';
+    const label = role === 'user' ? '用户' : 'Claude';
+    return `<div class="chat-row ${role}">
+      <div class="chat-meta">${esc(label)} · #${i + 1}</div>
+      <div class="chat-bubble ${role}">${esc(t.content)}</div>
+    </div>`;
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+  panel.querySelector('#history-clear').addEventListener('click', async () => {
+    if (!confirm('清空该用户的对话记录？下条消息会作为新对话开始。')) return;
+    const r2 = await api('DELETE',
+      `/api/v1/users/${encodeURIComponent(currentUserHash)}/history`);
+    if (r2.ok) {
+      renderHistory(panel);
+    } else {
+      alert('清空失败: ' + (r2.error || '未知错误'));
+    }
+  });
+}
+
+function renderActions(panel) {
+  panel.innerHTML = `
+    <div class="actions-grid">
+      <div class="action-card">
+        <h3>立即同步沙箱</h3>
+        <p>把该用户的 settings.json 镜像到 sandbox 容器里，并 reconcile 插件。完成后 sync_state 会从 unknown 变成 synced。</p>
+        <button class="btn" id="act-sync">立即同步</button>
+      </div>
+      <div class="action-card">
+        <h3>开启新对话</h3>
+        <p>清空对话历史。下条消息会作为新对话上下文开始。等同于 WeChat 端 /menu → 开启新对话。</p>
+        <button class="btn" id="act-new-chat">清空对话历史</button>
+      </div>
+      <div class="action-card">
+        <h3>重置为默认设置</h3>
+        <p>把该用户的 settings.json 覆盖成当前的『出厂默认』模板。用户的个人自定义会丢失。</p>
+        <button class="btn secondary" id="act-reset-defaults">应用默认设置</button>
+      </div>
+      <div class="action-card">
+        <h3>删除沙箱</h3>
+        <p>删除该用户所有状态（settings / 历史 / 文件）。下条消息会重新初始化。<strong>不可撤销。</strong></p>
+        <button class="btn danger" id="act-delete">删除沙箱</button>
+      </div>
+    </div>
+    <p class="small" style="margin-top:16px;" id="act-status"></p>`;
+
+  panel.querySelector('#act-sync').addEventListener('click', async () => {
+    const status = panel.querySelector('#act-status');
+    status.textContent = '同步中...';
+    const r = await api('POST',
+      `/api/v1/users/${encodeURIComponent(currentUserHash)}/sync`);
+    if (r.ok) {
+      status.textContent = '✓ 后台正在同步，几秒后用户列表会更新 sync_state。';
+      // 1.5s 后刷新用户列表，让 sync_state 的变化可见
+      setTimeout(loadUsers, 2000);
+    } else {
+      status.textContent = '失败: ' + (r.error || r.detail || '?');
+    }
+  });
+
+  panel.querySelector('#act-new-chat').addEventListener('click', async () => {
+    if (!confirm('清空该用户的对话历史？')) return;
+    await api('DELETE', `/api/v1/users/${encodeURIComponent(currentUserHash)}/history`);
+    panel.querySelector('#act-status').textContent = '已清空对话历史。';
+  });
+  panel.querySelector('#act-reset-defaults').addEventListener('click', async () => {
+    if (!confirm('把该用户的 settings.json 重置为默认模板？')) return;
+    await api('POST', '/api/v1/defaults/apply', { user_hashes: [currentUserHash] });
+    panel.querySelector('#act-status').textContent = '已重置为默认设置。';
+    setTimeout(loadUsers, 1500);
+  });
+  panel.querySelector('#act-delete').addEventListener('click', async () => {
+    if (!confirm('删除该用户的整个沙箱？该操作不可撤销。')) return;
+    await api('DELETE', `/api/v1/users/${encodeURIComponent(currentUserHash)}`);
+    currentUserHash = null;
+    const pane = document.getElementById('user-detail-pane');
+    pane.innerHTML = '从左侧选择一个用户查看详情';
+    pane.classList.add('empty');
+    loadUsers();
+  });
+}
+
+// -------- accounts --------
+async function loadAccounts() {
+  const r = await api('GET', '/api/v1/accounts');
+  const el = document.getElementById('accounts-list');
+  const list = r.accounts || [];
+  if (list.length === 0) {
+    el.innerHTML = '<div class="empty">还没有账号。点下面 "<strong>+ 添加账号</strong>" 用 QR 扫码登录。</div>';
+    return;
+  }
+  el.innerHTML = list.map(a => `<details style="margin-bottom:8px;">
+    <summary><strong>${esc(a.account_id)}</strong>
+      <span class="small">${a.has_token
+        ? '<span class="badge badge-ok">token 有效</span>'
+        : '<span class="badge badge-err">无 token</span>'}</span>
+      <span class="badge" style="background:#334;color:#cde;margin-left:6px;">${esc(a.platform_id || 'ilink-wechat')}</span>
+    </summary>
+    <div class="small">协议: <strong>${esc(a.platform_id || 'ilink-wechat')}</strong></div>
+    <div class="small">绑定的用户 id: ${esc(a.user_id || '?')}</div>
+    <div class="small">base_url: ${esc(a.base_url || 'default')}</div>
+    <div class="small">最后保存: ${esc(a.saved_at || '?')}</div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn secondary btn-small btn-relogin" data-id="${esc(a.account_id)}">重新扫码登录</button>
+      <button class="btn-revoke btn-delete-acct" data-id="${esc(a.account_id)}">删除账号</button>
+    </div>
+  </details>`).join('');
+  // 重登
+  el.querySelectorAll('.btn-relogin').forEach(b => {
+    b.addEventListener('click', () => showQrModal(b.dataset.id));
+  });
+  // 删除
+  el.querySelectorAll('.btn-delete-acct').forEach(b => {
+    b.addEventListener('click', async () => {
+      const id = b.dataset.id;
+      if (!confirm(`删除账号 ${id}？\n\n注意：绑定到该账号的 WeChat 用户在下一条消息时会失去 bot 入口。`)) return;
+      const r = await api('DELETE', '/api/v1/accounts/' + encodeURIComponent(id));
+      if (!r.ok) alert('删除失败: ' + (r.error || r.detail || '?'));
+      loadAccounts();
+      loadDashboard();
+    });
+  });
+}
+document.getElementById('accounts-refresh').addEventListener('click', loadAccounts);
+document.getElementById('accounts-add').addEventListener('click', () => showQrModal());
+
+// -------- Phase 7: add WeChat account via QR -------------------------
+// 不传参 = 新加账号; 传 account_id = 给该账号重新扫码登录刷新 token。
+async function showQrModal(accountIdForRelogin) {
+  const isRelogin = !!accountIdForRelogin;
+  const host = openModal(`
+    <h2>${isRelogin ? '重新扫码登录 ' + esc(accountIdForRelogin) : '添加 WeChat 账号'}</h2>
+    <p class="modal-sub">${isRelogin
+      ? '原 token 过期或需要刷新，扫码后会覆盖保存。'
+      : '正在拉取 QR 码... 加载完成后用对应微信号扫码即可。'}</p>
+    <div class="qr-wrap">
+      <div id="qr-loading" class="small">加载中...</div>
+      <img id="qr-img" hidden alt="QR" />
+      <div id="qr-status" class="qr-status" hidden>等待扫码...</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="qr-cancel">取消</button>
+    </div>`);
+
+  let cancelled = false;
+  document.getElementById('qr-cancel').addEventListener('click', () => {
+    cancelled = true;
+    host.remove();
+  });
+
+  let r;
+  try {
+    r = isRelogin
+      ? await api('POST', '/api/v1/accounts/' + encodeURIComponent(accountIdForRelogin) + '/relogin')
+      : await api('POST', '/api/v1/qr/create');
+  } catch (e) {
+    return; // 401/403 已弹登录或 alert
+  }
+  if (cancelled) return;
+  if (!r.ok) {
+    document.getElementById('qr-loading').textContent =
+      '错误: ' + (r.error || '无法拉取 QR 码');
+    return;
+  }
+  document.getElementById('qr-loading').hidden = true;
+  const img = document.getElementById('qr-img');
+  img.src = 'data:image/png;base64,' + r.qrcode_img_content;
+  img.hidden = false;
+  const statusEl = document.getElementById('qr-status');
+  statusEl.hidden = false;
+  statusEl.textContent = '等待扫码...';
+
+  const key = r.qrcode;
+  // Poll every 2s until confirmed / expired / cancelled.
+  const tick = async () => {
+    if (cancelled) return;
+    let s;
+    try {
+      s = await api('GET', '/api/v1/qr/' + encodeURIComponent(key) + '/status');
+    } catch (e) {
+      cancelled = true;
+      return;
+    }
+    if (cancelled) return;
+    if (!s.ok) {
+      // 网络瞬时错误（DNS/TLS/connect 超时）显示为 "等待..." 而不是
+      // "失败" — daemon 端也用同样的 wait 语义。只有非网络错误才真显示。
+      statusEl.textContent = '等待中（网络抖动）... 自动重试';
+      statusEl.className = 'qr-status';
+      setTimeout(tick, 3000);
+      return;
+    }
+    if (s.status === 'confirmed') {
+      statusEl.textContent = '✓ 登录成功！账号已保存。';
+      statusEl.className = 'qr-status confirmed';
+      // refresh account list, close modal in 1.5s
+      setTimeout(() => {
+        host.remove();
+        loadAccounts();
+        loadDashboard();
+      }, 1500);
+      return;
+    }
+    if (s.status === 'expired') {
+      statusEl.textContent = 'QR 码已过期，请关闭重试。';
+      return;
+    }
+    if (s.status === 'scanned') {
+      statusEl.textContent = '✓ 已扫码，请在微信里点确认...';
+    } else {
+      statusEl.textContent = '等待扫码... (' + s.status + ')';
+    }
+    // 3 秒一次 — daemon 端单次 poll 最长 8 秒，3s 间隔不会堆压力
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 1500);
+}
+
+// -------- Phase 7: admin keys management --------------------------------
+async function loadAdminKeys() {
+  const wrap = document.getElementById('keys-list-wrap');
+  wrap.innerHTML = '<div class="empty">加载中...</div>';
+  let r;
+  try {
+    r = await api('GET', '/api/v1/admin/keys');
+  } catch (e) { return; }
+  const keys = r.keys || [];
+  if (keys.length === 0) {
+    wrap.innerHTML = '<div class="empty">还没有任何密钥</div>';
+    return;
+  }
+  const rows = keys.map(k => {
+    const rolePill = k.role === 'super_admin' ? 'super'
+                  : k.role === 'read_only' ? 'ro' : '';
+    const isMine = currentAdmin && k.id === currentAdmin.key_id;
+    const isLastSuper = k.role === 'super_admin' && k.active
+                       && keys.filter(x => x.role === 'super_admin' && x.active).length === 1;
+    const disableTitle = isMine ? '不能撤销自己当前正在使用的密钥'
+                       : isLastSuper ? '不能撤销最后一把 super_admin 密钥' : '';
+    return `<tr class="${k.active ? '' : 'revoked'}">
+      <td><strong>${esc(k.name)}</strong>
+          ${isMine ? '<span class="small" style="color:#94a3b8;">(当前)</span>' : ''}</td>
+      <td><span class="pill-role ${rolePill}">${esc(k.role)}</span></td>
+      <td><span class="pill-status ${k.active ? 'active' : 'revoked'}">${k.active ? '激活' : '已撤销'}</span></td>
+      <td class="small">${esc((k.created_at || '').slice(0, 19))}</td>
+      <td class="small">${esc((k.last_used_at || '从未').slice(0, 19))}</td>
+      <td>${k.active
+        ? `<button class="btn-revoke" data-id="${esc(k.id)}" data-name="${esc(k.name)}"
+                  ${(isMine || isLastSuper) ? 'disabled title="' + disableTitle + '"' : ''}>撤销</button>`
+        : ''}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="keys-table">
+    <thead><tr>
+      <th>名称</th><th>角色</th><th>状态</th><th>创建于</th><th>最后使用</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  wrap.querySelectorAll('.btn-revoke').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const name = btn.dataset.name;
+      if (!confirm(`撤销密钥 "${name}"？这是软删除，审计日志仍保留。`)) return;
+      const resp = await api('DELETE', '/api/v1/admin/keys/' + encodeURIComponent(id));
+      if (resp.ok === false) {
+        alert('撤销失败: ' + (resp.detail || resp.error || '?'));
+      }
+      loadAdminKeys();
+    });
+  });
+}
+
+document.getElementById('keys-refresh').addEventListener('click', loadAdminKeys);
+document.getElementById('keys-create-btn').addEventListener('click', showCreateKeyModal);
+
+function showCreateKeyModal() {
+  openModal(`
+    <h2>创建子管理员</h2>
+    <p class="modal-sub">明文密钥只在创建成功的那一次显示。复制后才能关闭弹窗。</p>
+    <label class="small" style="display:block;margin:6px 0 4px;">名称（自己起的标识）</label>
+    <input id="new-key-name" class="modal-input" type="text"
+      placeholder="alice-laptop / ops-readonly / ..." autocomplete="off" />
+    <label class="small" style="display:block;margin:14px 0 4px;">角色</label>
+    <select id="new-key-role" class="modal-input">
+      <option value="read_only">read_only — 只读（推荐给运维查看）</option>
+      <option value="read_write" selected>read_write — 可改用户/默认设置</option>
+      <option value="super_admin">super_admin — 可管理密钥 + 备份</option>
+    </select>
+    <p class="modal-msg" id="new-key-msg"></p>
+    <div class="modal-actions">
+      <button class="btn secondary" id="new-key-cancel">取消</button>
+      <button class="btn" id="new-key-submit">创建</button>
+    </div>
+  `);
+  document.getElementById('new-key-cancel').addEventListener('click', closeModal);
+  document.getElementById('new-key-submit').addEventListener('click', async () => {
+    const name = document.getElementById('new-key-name').value.trim();
+    const role = document.getElementById('new-key-role').value;
+    const msg = document.getElementById('new-key-msg');
+    if (!name) {
+      msg.className = 'modal-msg error';
+      msg.textContent = '名称不能为空。';
+      return;
+    }
+    msg.textContent = '创建中...';
+    msg.className = 'modal-msg';
+    let r;
+    try {
+      r = await api('POST', '/api/v1/admin/keys', { name, role });
+    } catch (e) { return; }
+    if (r.plaintext) {
+      // 创建成功 — 替换弹窗内容为"一次性密钥展示"。
+      const card = document.querySelector('#modal-host .modal-card');
+      card.innerHTML = `
+        <h2>✓ 子管理员已创建</h2>
+        <p class="modal-sub">把下面这串密钥发给对应的运维人员。
+        <strong style="color:#fbbf24;">明文只显示这一次，关闭后无法再次查看！</strong></p>
+        <div class="secret-banner">
+          <div class="small">名称: <strong>${esc(r.name)}</strong> · 角色: <strong>${esc(r.role)}</strong></div>
+          <code id="new-key-plaintext">${esc(r.plaintext)}</code>
+          <p class="warn">${esc(r.warning || '保存好这把密钥。')}</p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn secondary" id="copy-key">复制到剪贴板</button>
+          <button class="btn" id="ok-close">我已保存，关闭</button>
+        </div>`;
+      document.getElementById('copy-key').addEventListener('click', () => {
+        navigator.clipboard.writeText(r.plaintext);
+        document.getElementById('copy-key').textContent = '✓ 已复制';
+      });
+      document.getElementById('ok-close').addEventListener('click', () => {
+        closeModal();
+        loadAdminKeys();
+      });
+    } else {
+      msg.className = 'modal-msg error';
+      msg.textContent = '失败: ' + (r.detail || r.error || JSON.stringify(r));
+    }
+  });
+}
+
+// -------- Phase 3: audit log tab ----------------------------------------
+async function loadAudit() {
+  const wrap = document.getElementById('audit-list-wrap');
+  wrap.innerHTML = '<div class="empty">加载中...</div>';
+  const filter = document.getElementById('audit-filter-action').value.trim();
+  const q = filter ? '?action=' + encodeURIComponent(filter) + '&limit=200' : '?limit=100';
+  const r = await api('GET', '/api/v1/audit' + q);
+  const rows = r.entries || [];
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="empty">暂无审计记录</div>';
+    return;
+  }
+  wrap.innerHTML = `<table class="keys-table">
+    <thead><tr>
+      <th>时间</th><th>操作</th><th>对象</th><th>操作者</th><th>IP</th><th>详情</th>
+    </tr></thead>
+    <tbody>${rows.map(e => `<tr>
+      <td class="small">${esc((e.ts || '').slice(0, 19))}</td>
+      <td><code>${esc(e.action)}</code></td>
+      <td class="small">${esc((e.target || '').slice(0, 40))}</td>
+      <td class="small">${esc((e.actor_key_id || 'system').slice(0, 8))}…</td>
+      <td class="small">${esc(e.ip || '')}</td>
+      <td><button class="btn secondary btn-small" data-id="${e.id}">查看 JSON</button></td>
+    </tr>`).join('')}</tbody></table>`;
+  wrap.querySelectorAll('button[data-id]').forEach(b => {
+    b.addEventListener('click', () => {
+      const ent = rows.find(x => String(x.id) === b.dataset.id);
+      if (!ent) return;
+      openModal(`<h2>审计条目 #${ent.id}</h2>
+        <p class="modal-sub">${esc(ent.action)} · ${esc(ent.ts)}</p>
+        <pre style="background:#0f172a;padding:12px;border-radius:6px;font:11px monospace;
+                    color:#e2e8f0;max-height:50vh;overflow:auto;">${esc(JSON.stringify(ent, null, 2))}</pre>
+        <div class="modal-actions"><button class="btn" onclick="closeModal()">关闭</button></div>`);
+    });
+  });
+}
+document.getElementById('audit-refresh').addEventListener('click', loadAudit);
+document.getElementById('audit-filter-action').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadAudit();
+});
+
+// -------- Phase 5: backup tab -------------------------------------------
+async function loadBackupList() {
+  // 后端没暴露列表接口，先用 /healthz 不带，但实际文件路径是 ~/.weclawbot/backups/
+  // 这里我们直接给入口和说明。未来可以加 GET /api/v1/admin/backups。
+  const wrap = document.getElementById('backup-list-wrap');
+  wrap.innerHTML = `<p class="small">已生成的快照位于 daemon 主机的
+    <code>~/.weclawbot/backups/</code> 目录。SSH 进去 <code>ls -lh</code> 即可。
+    完整列表 API 未实现（v3）。每次"立即创建快照"都会追加一个时间戳文件。</p>`;
+}
+document.getElementById('backup-create-btn').addEventListener('click', async () => {
+  const st = document.getElementById('backup-status');
+  st.textContent = '备份中（VACUUM INTO，几秒）...';
+  const r = await api('POST', '/api/v1/admin/backup');
+  if (r.ok) {
+    st.textContent = `✓ 已写入 ${r.path}（${Math.round((r.size_bytes||0)/1024)} KB）`;
+  } else {
+    st.textContent = '失败: ' + (r.detail || r.error || '?');
+  }
+});
+document.getElementById('backup-refresh-btn').addEventListener('click', loadBackupList);
+
+// -------- Live config (热加载) -----------------------------------------
+async function loadSysConfig() {
+  const wrap = document.getElementById('config-form');
+  wrap.innerHTML = '<div class="empty">加载中...</div>';
+  let r;
+  try { r = await api('GET', '/api/v1/config'); } catch (e) { return; }
+  const c = r;
+  const ai = c.ai || {};
+  const echo = c.echo || {};
+  const webhook = c.webhook || {};
+  const sandbox = c.sandbox || {};
+  const ab = c.agentBinding || {};
+  const rl = c.rateLimit || {};
+
+  wrap.innerHTML = `
+    <h3 style="font-size:14px;color:#cbd5e1;margin:18px 0 8px;">AI Provider</h3>
+    <div class="form-row">
+      <label>启用 AI 回复</label>
+      <select id="cfg-ai-enabled" class="form-control">
+        <option value="true"${ai.enabled ? ' selected':''}>已启用</option>
+        <option value="false"${!ai.enabled ? ' selected':''}>已关闭</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Provider</label>
+      <select id="cfg-ai-provider" class="form-control">
+        <option value="claude"${ai.provider==='claude'?' selected':''}>claude (sandbox CLI)</option>
+        <option value="codex"${ai.provider==='codex'?' selected':''}>codex (sandbox CLI)</option>
+        <option value="api"${ai.provider==='api'?' selected':''}>api (OpenAI-compatible HTTP)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Model</label>
+      <input id="cfg-ai-model" class="form-control" type="text" value="${esc(ai.model||'')}" />
+    </div>
+    <div class="form-row">
+      <label>System Prompt（运营商附加规则，daemon 已经强制注入身份 system prompt，这里是补充）</label>
+      <textarea id="cfg-ai-system-prompt" class="form-control" rows="3">${esc(ai.systemPrompt||'')}</textarea>
+    </div>
+    <div class="form-row">
+      <label>History Limit (轮)</label>
+      <input id="cfg-ai-history" class="form-control" type="number" min="0" max="100" value="${ai.historyLimit||20}" />
+    </div>
+    <div class="form-row">
+      <label>Timeout (ms)</label>
+      <input id="cfg-ai-timeout" class="form-control" type="number" min="1000" value="${ai.timeoutMs||300000}" />
+    </div>
+    <div class="form-row">
+      <label>API Mode 专用 — Base URL</label>
+      <input id="cfg-ai-baseurl" class="form-control" type="text" value="${esc(ai.baseUrl||'')}" />
+    </div>
+    <div class="form-row">
+      <label>API Mode 专用 — API Key (掩码显示；保留掩码 = 不修改原值)</label>
+      <input id="cfg-ai-apikey" class="form-control" type="text" value="${esc(ai.apiKey||'')}" autocomplete="off" />
+    </div>
+
+    <h3 style="font-size:14px;color:#cbd5e1;margin:24px 0 8px;">Webhook (优先级 > AI)</h3>
+    <div class="form-row">
+      <label>URL (必须 https://，或本地 http://localhost)</label>
+      <input id="cfg-webhook-url" class="form-control" type="text" value="${esc(webhook.url||'')}" />
+    </div>
+    <div class="form-row">
+      <label>Timeout (ms)</label>
+      <input id="cfg-webhook-timeout" class="form-control" type="number" min="1000" value="${webhook.timeoutMs||30000}" />
+    </div>
+
+    <h3 style="font-size:14px;color:#cbd5e1;margin:24px 0 8px;">Echo Fallback</h3>
+    <div class="form-row">
+      <label>启用 Echo（AI 全部失败时直接 echo 用户输入）</label>
+      <select id="cfg-echo-enabled" class="form-control">
+        <option value="true"${echo.enabled?' selected':''}>已启用</option>
+        <option value="false"${!echo.enabled?' selected':''}>已关闭</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Echo Prefix</label>
+      <input id="cfg-echo-prefix" class="form-control" type="text" value="${esc(echo.prefix||'')}" />
+    </div>
+
+    <h3 style="font-size:14px;color:#cbd5e1;margin:24px 0 8px;">沙箱</h3>
+    <div class="form-row">
+      <label>Container Image</label>
+      <input id="cfg-sandbox-image" class="form-control" type="text" value="${esc(sandbox.image||'')}" />
+    </div>
+
+    <h3 style="font-size:14px;color:#cbd5e1;margin:24px 0 8px;">Agent Binding</h3>
+    <div class="form-row">
+      <label>启用 WeChat-user ⇄ bot 黏性绑定</label>
+      <select id="cfg-ab-enabled" class="form-control">
+        <option value="true"${ab.enabled?' selected':''}>已启用</option>
+        <option value="false"${!ab.enabled?' selected':''}>已关闭</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Max Agents</label>
+      <input id="cfg-ab-max" class="form-control" type="number" min="1" value="${ab.maxAgents||20}" />
+    </div>
+
+    <h3 style="font-size:14px;color:#cbd5e1;margin:24px 0 8px;">入站限流 (Phase 5.1)</h3>
+    <div class="form-row">
+      <label>每个 WeChat 用户每分钟最多条数 (0 = 不限)</label>
+      <input id="cfg-rl-pm" class="form-control" type="number" min="0" value="${rl.userPerMinute ?? 30}" />
+    </div>
+
+    <div class="btn-row" style="margin-top:20px;">
+      <button class="btn" id="cfg-save">保存并热加载</button>
+      <button class="btn secondary" id="cfg-reload">放弃改动 (重读)</button>
+      <span class="small" id="cfg-status"></span>
+    </div>
+  `;
+
+  document.getElementById('cfg-reload').addEventListener('click', loadSysConfig);
+  document.getElementById('cfg-save').addEventListener('click', async () => {
+    const status = document.getElementById('cfg-status');
+    status.textContent = '保存中...';
+    const payload = {
+      config: {
+        ai: {
+          enabled: document.getElementById('cfg-ai-enabled').value === 'true',
+          provider: document.getElementById('cfg-ai-provider').value,
+          model: document.getElementById('cfg-ai-model').value,
+          systemPrompt: document.getElementById('cfg-ai-system-prompt').value,
+          historyLimit: parseInt(document.getElementById('cfg-ai-history').value, 10) || 20,
+          timeoutMs: parseInt(document.getElementById('cfg-ai-timeout').value, 10) || 300000,
+          baseUrl: document.getElementById('cfg-ai-baseurl').value,
+          apiKey: document.getElementById('cfg-ai-apikey').value,
+        },
+        echo: {
+          enabled: document.getElementById('cfg-echo-enabled').value === 'true',
+          prefix: document.getElementById('cfg-echo-prefix').value,
+        },
+        webhook: {
+          url: document.getElementById('cfg-webhook-url').value,
+          timeoutMs: parseInt(document.getElementById('cfg-webhook-timeout').value, 10) || 30000,
+        },
+        sandbox: {
+          image: document.getElementById('cfg-sandbox-image').value,
+        },
+        agentBinding: {
+          enabled: document.getElementById('cfg-ab-enabled').value === 'true',
+          maxAgents: parseInt(document.getElementById('cfg-ab-max').value, 10) || 20,
+        },
+        rateLimit: {
+          userPerMinute: parseInt(document.getElementById('cfg-rl-pm').value, 10) || 0,
+        },
+      }
+    };
+    const r2 = await api('PUT', '/api/v1/config', payload);
+    if (r2.ok) {
+      status.textContent = '✓ ' + (r2.note || '已保存');
+      setTimeout(loadSysConfig, 800);
+    } else {
+      status.textContent = '失败: ' + (r2.detail || r2.error || '?');
+    }
+  });
+}
+
+// -------- Logs tab ------------------------------------------------------
+let logsAutoTimer = null;
+async function loadLogs() {
+  const view = document.getElementById('logs-view');
+  const lines = document.getElementById('logs-lines').value;
+  view.textContent = '加载中...';
+  const r = await api('GET', '/api/v1/logs?lines=' + encodeURIComponent(lines));
+  view.textContent = (r.lines || []).join('\n');
+  view.scrollTop = view.scrollHeight;
+  document.getElementById('logs-meta').textContent =
+    `返回 ${r.returned || 0} / 文件共 ${r.total_lines || 0} 行 · ${r.path || ''}`;
+}
+document.getElementById('logs-refresh').addEventListener('click', loadLogs);
+document.getElementById('logs-lines').addEventListener('change', loadLogs);
+document.getElementById('logs-auto').addEventListener('change', e => {
+  if (logsAutoTimer) { clearInterval(logsAutoTimer); logsAutoTimer = null; }
+  if (e.target.checked) logsAutoTimer = setInterval(loadLogs, 5000);
+});
+
+// -------- Metrics tab ---------------------------------------------------
+let metricsAutoTimer = null;
+async function loadMetrics() {
+  const raw = await fetch('/metrics').then(r => r.text()).catch(() => '');
+  document.getElementById('metrics-raw').textContent = raw;
+  const summary = parsePrometheus(raw);
+  renderMetricsSummary(summary);
+}
+document.getElementById('metrics-refresh').addEventListener('click', loadMetrics);
+document.getElementById('metrics-auto').addEventListener('change', e => {
+  if (metricsAutoTimer) { clearInterval(metricsAutoTimer); metricsAutoTimer = null; }
+  if (e.target.checked) metricsAutoTimer = setInterval(loadMetrics, 10000);
+});
+
+function parsePrometheus(text) {
+  // 简化解析：每条 metric 取最后一行数据（同一 series 多次出现取最后一次）
+  const series = {};
+  for (const line of text.split('\n')) {
+    if (!line || line.startsWith('#')) continue;
+    const m = line.match(/^([a-z_:][a-z0-9_:]*)(\{[^}]*\})?\s+(.+)$/i);
+    if (!m) continue;
+    const name = m[1];
+    const labels = m[2] || '';
+    const val = parseFloat(m[3]);
+    if (!(name in series)) series[name] = [];
+    series[name].push({ labels, val });
+  }
+  return series;
+}
+
+function renderMetricsSummary(s) {
+  const host = document.getElementById('metrics-summary');
+  const cards = [];
+  const get = (name) => s[name] || [];
+  const sum = (name) => get(name).reduce((a, b) => a + b.val, 0);
+  const latest = (name) => {
+    const arr = get(name);
+    return arr.length ? arr[arr.length - 1].val : null;
+  };
+
+  cards.push(`<div class="stat-grid">
+    <div class="stat"><div class="value">${sum('weclawbot_inbound_messages_total').toFixed(0)}</div><div class="label">总入站消息</div></div>
+    <div class="stat"><div class="value">${sum('weclawbot_ai_invocations_total').toFixed(0)}</div><div class="label">AI 调用次数</div></div>
+    <div class="stat"><div class="value">${sum('weclawbot_api_requests_total').toFixed(0)}</div><div class="label">Admin API 调用</div></div>
+    <div class="stat"><div class="value">${sum('weclawbot_panics_total').toFixed(0)}</div><div class="label">Panic 总次数</div></div>
+    <div class="stat"><div class="value">${sum('weclawbot_rate_limit_checks_total').toFixed(0)}</div><div class="label">限流检查</div></div>
+    <div class="stat"><div class="value">${latest('weclawbot_claude_oauth_expires_seconds') != null ? Math.floor(latest('weclawbot_claude_oauth_expires_seconds')/3600) + 'h' : '?'}</div><div class="label">OAuth 剩余</div></div>
+  </div>`);
+
+  // AI invocations 按 provider/status 分组
+  const aiRows = get('weclawbot_ai_invocations_total').map(r =>
+    `<tr><td><code>${esc(r.labels)}</code></td><td>${r.val.toFixed(0)}</td></tr>`).join('');
+  if (aiRows) {
+    cards.push(`<h3 style="margin:18px 0 8px;font-size:14px;color:#cbd5e1;">AI 调用明细</h3>
+      <table class="keys-table"><thead><tr><th>labels</th><th>count</th></tr></thead>
+      <tbody>${aiRows}</tbody></table>`);
+  }
+
+  // API 请求按 path/status
+  const apiRows = get('weclawbot_api_requests_total')
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 20)
+    .map(r => `<tr><td><code>${esc(r.labels)}</code></td><td>${r.val.toFixed(0)}</td></tr>`)
+    .join('');
+  if (apiRows) {
+    cards.push(`<h3 style="margin:18px 0 8px;font-size:14px;color:#cbd5e1;">Admin API 调用 Top 20</h3>
+      <table class="keys-table"><thead><tr><th>labels</th><th>count</th></tr></thead>
+      <tbody>${apiRows}</tbody></table>`);
+  }
+  host.innerHTML = cards.join('');
+}
+
+// -------- Sandboxes tab -------------------------------------------------
+let sandboxesAutoTimer = null;
+async function loadSandboxes() {
+  const wrap = document.getElementById('sandboxes-list');
+  let r;
+  try { r = await api('GET', '/api/v1/sandboxes'); } catch (e) { return; }
+  if (!r.ok) {
+    wrap.innerHTML = `<div class="empty">无法读取沙箱状态：${esc(r.error || '?')}</div>`;
+    return;
+  }
+  if (!r.count) {
+    wrap.innerHTML = '<div class="empty">当前没有正在运行的容器（健康状态下空表是常态）</div>';
+    return;
+  }
+  wrap.innerHTML = `<table class="keys-table"><thead><tr>
+    <th>ID</th><th>Image</th><th>状态</th><th>启动时间</th><th>命令</th>
+    </tr></thead><tbody>${r.containers.map(c => `<tr>
+      <td><code>${esc(c.id || '')}</code></td>
+      <td class="small">${esc((c.image || '').slice(0, 50))}</td>
+      <td>${esc(c.status || c.state || '')}</td>
+      <td class="small">${esc(c.created || '')}</td>
+      <td class="small">${esc((c.command || []).join ? (c.command || []).join(' ').slice(0, 60) : '')}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+document.getElementById('sandboxes-refresh').addEventListener('click', loadSandboxes);
+document.getElementById('sandboxes-auto').addEventListener('change', e => {
+  if (sandboxesAutoTimer) { clearInterval(sandboxesAutoTimer); sandboxesAutoTimer = null; }
+  if (e.target.checked) sandboxesAutoTimer = setInterval(loadSandboxes, 3000);
+});
+
+// -------- generic modal helper -----------------------------------------
+function openModal(innerHTML) {
+  let host = document.getElementById('modal-host');
+  if (host) host.remove();
+  host = document.createElement('div');
+  host.id = 'modal-host';
+  host.className = 'modal-backdrop';
+  host.innerHTML = `<div class="modal-card">${innerHTML}</div>`;
+  document.body.appendChild(host);
+  return host;
+}
+function closeModal() {
+  const host = document.getElementById('modal-host');
+  if (host) host.remove();
+}
+
+// -------- util --------
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+
+// -------- init --------
+document.addEventListener('DOMContentLoaded', bootstrap);
+</script>
+</body>
+</html>

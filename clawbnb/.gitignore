@@ -1,0 +1,52 @@
+# --- Rust build artefacts ---
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# weclawbot-mcp 子 crate 的 target（独立 cargo workspace）
+/weclawbot-mcp/target/
+
+# --- Editor / IDE ---
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Runtime / dev state（**不应该**进 repo） ---
+# 这些是 weclawbot daemon 自己生成的运行时数据；用户 home 下也有一份。
+# 防止开发期把 dev DB / 密钥 / token 等意外提交。
+state.db
+state.db-*
+.db-key
+INITIAL-ADMIN-KEY.txt
+weclawbot.pid
+*.snapshot
+*.backup
+backups/
+logs/
+captures/
+
+# --- Sandbox / Docker context（如果操作员在本目录跑构建会产生）---
+sandbox-image-build/
+
+# --- Test artefacts ---
+/tmp/
+coverage/
+*.profraw
+lcov.info
+
+# --- Secrets / env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Generated / cache ---
+node_modules/
+*.log

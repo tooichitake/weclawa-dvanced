@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clawbnb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clawbnb/target
+            clawbnb/weclawbot-mcp/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('clawbnb/**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: rustfmt --check (host)
+        run: cargo fmt --check
+
+      - name: rustfmt --check (mcp)
+        working-directory: clawbnb/weclawbot-mcp
+        run: cargo fmt --check
+
+      - name: clippy (host)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: clippy (mcp)
+        working-directory: clawbnb/weclawbot-mcp
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test (host)
+        run: cargo test --release
+
+      - name: cargo test (mcp)
+        working-directory: clawbnb/weclawbot-mcp
+        run: cargo test --release
+
+      - name: cargo build (host)
+        run: cargo build --release
+
+      - name: cargo build (mcp)
+        working-directory: clawbnb/weclawbot-mcp
+        run: cargo build --release
+
+  # Phase 8: supply-chain security gates. cargo-audit checks for CVEs
+  # in transitive dependencies; cargo-deny enforces license + advisory
+  # policy. Both run on every PR and fail the build if a new advisory
+  # lands on a dep we ship. Cached install keeps the per-job cost <5s.
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clawbnb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit || true
+      - name: Run cargo-audit
+        run: cargo audit --deny warnings
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny || true
+      - name: Run cargo-deny
+        run: cargo deny --all-features check advisories bans sources
+
+  coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clawbnb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov || true
+      - name: Generate coverage (lcov)
+        run: cargo llvm-cov --all-features --release --lcov --output-path lcov.info
+      - name: Upload coverage artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: clawbnb/lcov.info

@@ -1,0 +1,78 @@
+name: E2E smoke
+
+# Manual-only — the smoke harness drives real Claude through the sandbox,
+# which needs a valid OAuth token and a working podman+runsc environment.
+# CI runners don't usually have either, so this is a `workflow_dispatch`
+# button rather than an automatic trigger.
+#
+# Local invocation (the usual path):
+#   bash clawbnb/scripts/smoke-e2e.sh
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clawbnb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check prerequisites
+        run: |
+          if [ -z "${{ secrets.CLAUDE_OAUTH_TOKEN }}" ]; then
+            echo "::error::Set the CLAUDE_OAUTH_TOKEN repo secret first. See ARCHITECTURE.md for layout."
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install podman + runsc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          # gVisor: latest release
+          ARCH=x86_64
+          curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/runsc" \
+            | sudo install /dev/stdin /usr/local/bin/runsc
+          mkdir -p ~/.config/containers
+          cat > ~/.config/containers/containers.conf <<EOF
+          [engine.runtimes]
+          runsc = ["/usr/local/bin/runsc"]
+          EOF
+
+      - name: Inject Claude credentials
+        run: |
+          mkdir -p ~/.claude
+          echo '${{ secrets.CLAUDE_OAUTH_TOKEN }}' > ~/.claude/.credentials.json
+          chmod 600 ~/.claude/.credentials.json
+
+      - name: Build host binary + MCP
+        run: |
+          cargo build --release
+          (cd weclawbot-mcp && cargo build --release)
+          mkdir -p $HOME/weclawbot-target/release
+          cp target/release/weclawbot $HOME/weclawbot-target/release/
+
+      - name: Build sandbox image
+        run: |
+          podman build -t localhost/weclawbot-sandbox-base:dev \
+            -f build/Dockerfile .
+
+      - name: Run smoke
+        run: |
+          export WECLAWBOT_BIN=$HOME/weclawbot-target/release/weclawbot
+          bash scripts/smoke-e2e.sh
+
+      - name: Upload daemon log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-log
+          path: ~/.weclawbot/logs/

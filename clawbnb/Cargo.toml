@@ -1,0 +1,151 @@
+[package]
+name = "weclawbot"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone WeChat-to-AI message bridge with multi-tenant isolation"
+license = "MIT"
+
+# `weclawbot-mcp` (stdio JSON-RPC MCP server baked into the sandbox image)
+# lives as a sibling standalone Cargo package at ./weclawbot-mcp/. Keeping it
+# out of this package's [[bin]] list means the Docker mcp-builder stage can
+# compile it without dragging in tokio/reqwest/axum/etc.
+
+[features]
+default = []
+# v2.2 L4.1 (deferred to v3): ACP (Agent Client Protocol) — long-running
+# claude session per user via stdio JSON-RPC, instead of spawning a fresh
+# container + claude-cli per inbound message. Reduces cold-start latency
+# from 800ms+ to ~100ms but requires claude-cli stdio long-session support,
+# which is still evolving upstream. The flag exists so v3 can flip default
+# = ["acp"] when the protocol stabilises; v2.2 ships with per-message
+# containers as before.
+acp = []
+
+# v5 M6 — Postgres backend support. **Feature flag 占位 only**：
+# 启用本 feature 会把 sqlx 编译时 enable `postgres` driver，让 sqlx::Any
+# 在运行时可以连 Postgres。但 weclawbot 当前所有 repo 用具体
+# `SqlitePool` 类型 ── 不是 `AnyPool`。真切 Postgres 需 v5.1 PR：
+#   1. 把 repo 里的 `sqlx::SqlitePool` 改成 `sqlx::AnyPool`
+#   2. 检查所有 SQLite-specific SQL（PRAGMA / INSERT OR IGNORE 等）的
+#      Postgres 等价（多数 LSP-标准 SQL 直接通；ON CONFLICT 子句 SQLite
+#      和 Postgres 一致；只有 PRAGMA journal_mode / busy_timeout 需要
+#      条件编译）
+#   3. Migration runner 适配（refinery_schema_history vs _sqlx_migrations 已
+#      处理，但 SQL 文件本身需检 Postgres 语法）
+#
+# 本期保留 flag 占位，让 Cargo 编译时检测到这条路径存在；真切换给 v5.1。
+postgres = ["sqlx/postgres"]
+
+# v3 Enterprise Edition — `ee/` 子树 (PostHog 模式)。MIT 主线保持精简，
+# ee/ 下放 SSO/SAML/SLA monitoring/advanced RBAC 等"商业级"特性。
+# 默认 off，hosted SaaS 部署时 `--features ee` 编进 binary。Open-source
+# 用户使用核心功能不受影响。当前 ee 子模块只搭骨架（无实际 SSO 实现），
+# v3 PR 增量补全。
+ee = ["dep:jsonwebtoken"]
+
+# v3 OpenTelemetry — distributed tracing via OTLP exporter (default to
+# stdout in dev, configurable endpoint in prod). 多租户 SaaS 跨 service
+# 追踪用。Prometheus metrics 不被替代，仍然存在；OTel 是叠加层。
+otel = ["dep:tracing-opentelemetry", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry_sdk"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+qrcode = "0.14"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+dirs = "6"
+sha1 = "0.10"
+# Phase 6.4: SHA-256 用作新用户的 short-hash 来源。SHA-1 在这里
+# 只是 de-dup 不是 crypto，所以技术上不算安全升级 —— 但保留
+# Sha1 在 deps 树里会让 cargo audit/license review 多解释一次，
+# 切换更省心。
+sha2 = "0.10"
+# v2.1.A4: webhook HMAC signature (Stripe-style X-Weclawbot-Signature header).
+hmac = "0.12"
+# v2.1.B1: Config 热缓存。daemon 启动时 load 一次，notify watcher 监听
+# config.json mtime 变化，ArcSwap::store 一刹那切换。读取 = atomic load + clone Arc。
+arc-swap = "1"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+rand = "0.9"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+tower-http = { version = "0.6", features = ["cors", "limit"] }
+urlencoding = "2"
+aes = "0.8"
+hex = "0.4"
+md-5 = "0.10"
+portable-pty = "0.9"
+vt100 = "0.16"
+regex = "1"
+url = "2"
+
+# v4.2: SQLite-backed state via **sqlx only** (rusqlite/r2d2/refinery 都
+# 删了)。bundled-sqlite 让 binary 自包含 —— 不依赖系统 libsqlite3。所有
+# repo + migration runner 走 sqlx async pool。
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "1"
+
+# Phase 3: admin API key bootstrap + bearer authentication.
+# argon2 is the password-hashing standard (winner of PHC competition,
+# RFC 9106). We use argon2id with default params + per-key random salt;
+# verify is constant-time. data-encoding gives us Crockford-friendly
+# base32 for human-typable key prefixes.
+argon2 = "0.5"
+data-encoding = "2"
+futures-util = "0.3"
+
+# Phase 4: observability. `metrics` is the standard Rust metrics facade
+# (similar role to `tracing` for logging); `metrics-exporter-prometheus`
+# converts the in-process registry into a Prometheus scrape endpoint.
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+
+# v2.2 L2.1 / L2.2: trait 抽象（MessagingPlatform / ReplyProvider）。
+# Rust async-in-trait (RFC 3185) 在 1.75 stable 后官方支持但有些限制
+# （不支持 dyn-compatibility 直接 Box<dyn>），所以为了能写 trait
+# object（Box<dyn ReplyProvider> 用于 dispatch chain）继续用 async-trait。
+async-trait = "0.1"
+
+# Phase 6.1: token-at-rest encryption. `aes-gcm` provides AES-256-GCM
+# (authenticated encryption with associated data) per NIST SP 800-38D.
+# Every token row gets a unique 96-bit random nonce; reusing a (key,
+# nonce) pair would catastrophically break AES-GCM, so we hard-fail
+# rather than risk it.
+aes-gcm = "0.10"
+
+# v3 OTel — optional, enabled via `--features otel`. opentelemetry has
+# a churny API surface so we pin via the otel feature set, not as a
+# default dep — keeps non-OTel deployments lean. tracing-opentelemetry
+# bridges `tracing` spans into OTel spans.
+tracing-opentelemetry = { version = "0.28", optional = true }
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry-otlp = { version = "0.27", optional = true, features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio"] }
+
+# v3.5 H1 — OIDC id_token signature verification. Only pulled in with
+# `--features ee` since OIDC SSO is enterprise-only (open-source users
+# stick with admin keys). JWKS endpoint fetch is via reqwest (already
+# in tree); jsonwebtoken handles RS256/ES256 verify.
+jsonwebtoken = { version = "9", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+tokio = { version = "1", features = ["full", "test-util"] }
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
+codegen-units = 1

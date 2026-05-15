@@ -1,0 +1,30 @@
+# systemd --user unit for weclawbot.
+#
+# Install:
+#   cp build/weclawbot.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now weclawbot
+#   loginctl enable-linger $USER   # survive logout
+#
+# Logs:    journalctl --user -u weclawbot -f
+# Restart: systemctl --user restart weclawbot
+
+[Unit]
+Description=weclawbot — WeChat ↔ Claude Code bridge (gVisor-sandboxed)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/weclawbot start --foreground
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+# Limit how often we re-spawn on crash loops.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

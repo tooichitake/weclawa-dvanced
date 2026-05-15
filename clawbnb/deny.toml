@@ -1,0 +1,55 @@
+# cargo-deny configuration — Phase 8 supply-chain gate.
+#
+# Run locally:  cargo deny --all-features check
+# CI runs it on every PR (see .github/workflows/ci.yml).
+
+[graph]
+all-features = true
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Block builds when any RustSec advisory matches a dep we ship.
+# `yanked = "warn"` because yanks are often retroactive metadata fixes,
+# not security issues — surface them to maintainers but don't block PRs.
+yanked = "warn"
+ignore = []
+
+[licenses]
+# Allow the standard permissive licenses we'd expect in the dep graph.
+# If a new dep brings a copyleft or unknown license, the build fails
+# and the maintainer makes an explicit decision.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",  # weak copyleft — fine when used as a library
+    "OpenSSL",  # rusqlite vendored bundle, no direct OpenSSL link
+    "BSL-1.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+# Multiple versions of the same crate are not a bug per se, but a
+# wide divergence (rand 0.8 + rand 0.9 + rand_core 0.6 + ...) signals
+# a poorly-converged dep graph. Warn so reviewers notice.
+multiple-versions = "warn"
+wildcards = "deny"
+# Crates explicitly forbidden: OpenSSL via rust-openssl (we prefer
+# rustls and the bundled SQLite, no need to ship a system TLS).
+deny = [
+    { name = "openssl-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
