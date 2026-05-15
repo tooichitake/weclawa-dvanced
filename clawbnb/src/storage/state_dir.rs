@@ -20,10 +20,6 @@ pub fn accounts_dir() -> PathBuf {
     state_dir().join("accounts")
 }
 
-pub fn accounts_index_path() -> PathBuf {
-    state_dir().join("accounts.json")
-}
-
 pub fn sync_dir() -> PathBuf {
     state_dir().join("sync")
 }
@@ -35,10 +31,6 @@ pub fn config_path() -> PathBuf {
         }
     }
     state_dir().join("config.json")
-}
-
-pub fn user_agent_map_path() -> PathBuf {
-    state_dir().join("user-agent-map.json")
 }
 
 pub fn logs_dir() -> PathBuf {

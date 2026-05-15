@@ -45,27 +45,10 @@ pub struct TrustInputs {
     pub integrity: f64,
 }
 
-impl TrustInputs {
-    /// 新用户默认 — 中性 0.5 trust。
-    pub fn neutral() -> Self {
-        Self {
-            success_rate: 0.5,
-            uptime: 0.5,
-            threat: 0.5,
-            integrity: 0.5,
-        }
-    }
-}
-
-/// 加权综合 — 0.0 到 1.0。clamp 防止 input out of range。
-pub fn compute(inputs: &TrustInputs) -> f64 {
-    let s = inputs.success_rate.clamp(0.0, 1.0);
-    let u = inputs.uptime.clamp(0.0, 1.0);
-    let t = inputs.threat.clamp(0.0, 1.0);
-    let i = inputs.integrity.clamp(0.0, 1.0);
-    let raw = 0.4 * s + 0.2 * u + 0.2 * (1.0 - t) + 0.2 * i;
-    raw.clamp(0.0, 1.0)
-}
+// v7.0 housekeeping: `TrustInputs::neutral()` constructor + `compute()`
+// scoring function removed — neither is wired into a production path
+// (no scoring driver loop exists yet). When v3 adds the driver, revive
+// both alongside `repo::trust_async::upsert`.
 
 /// 根据 trust 分等级，决定 daemon 应用哪套限制档位。各 tier 的具体限制
 /// 数字写在 daemon config，本 enum 只标语义。
@@ -92,60 +75,14 @@ impl TrustTier {
         }
     }
 
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Trusted => "trusted",
-            Self::Standard => "standard",
-            Self::Restricted => "restricted",
-            Self::Quarantined => "quarantined",
-        }
-    }
+    // v7.0 housekeeping: `as_str()` removed alongside the dead `upsert`
+    // path that was its only caller. Serialize derive still gives us
+    // "trusted"/"standard"/etc via `#[serde(rename_all = "lowercase")]`.
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn perfect_inputs_yield_perfect_score() {
-        let s = compute(&TrustInputs {
-            success_rate: 1.0,
-            uptime: 1.0,
-            threat: 0.0,
-            integrity: 1.0,
-        });
-        assert!((s - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn worst_inputs_yield_zero() {
-        let s = compute(&TrustInputs {
-            success_rate: 0.0,
-            uptime: 0.0,
-            threat: 1.0,
-            integrity: 0.0,
-        });
-        assert!(s.abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn neutral_inputs_yield_half() {
-        let s = compute(&TrustInputs::neutral());
-        // 0.4*0.5 + 0.2*0.5 + 0.2*0.5 + 0.2*0.5 = 0.5
-        assert!((s - 0.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn out_of_range_input_is_clamped() {
-        let s = compute(&TrustInputs {
-            success_rate: 2.0,   // > 1.0 → clamped to 1.0
-            uptime: -1.0,        // < 0.0 → clamped to 0.0
-            threat: 2.0,         // > 1.0 → clamped to 1.0 → (1-1) = 0
-            integrity: 1.0,
-        });
-        // = 0.4*1.0 + 0.2*0.0 + 0.2*0.0 + 0.2*1.0 = 0.6
-        assert!((s - 0.6).abs() < 0.001);
-    }
 
     #[test]
     fn tier_boundaries() {

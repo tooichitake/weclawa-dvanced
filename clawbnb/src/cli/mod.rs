@@ -1,11 +1,9 @@
 pub mod ai_setup;
-pub mod archive;
 pub mod backup;
 pub mod config;
 pub mod open_browser;
 pub mod doctor;
 pub mod export_tenant;
-pub mod import;
 pub mod login;
 pub mod restart;
 pub mod send;

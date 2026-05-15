@@ -376,11 +376,6 @@ fn bad_request(detail: &str) -> (StatusCode, Json<Value>) {
     )
 }
 
-#[allow(dead_code)]
-fn internal(e: crate::storage::db::DbError) -> (StatusCode, Json<Value>) {
-    internal_str(e.to_string())
-}
-
 fn internal_str(detail: impl Into<String>) -> (StatusCode, Json<Value>) {
     let detail = detail.into();
     tracing::error!("admin api error: {detail}");

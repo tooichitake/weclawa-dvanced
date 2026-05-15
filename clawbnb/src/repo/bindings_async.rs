@@ -67,60 +67,11 @@ impl SqlxBindingRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    pub async fn set_active_account(
-        &self,
-        user: &WeixinUserId,
-        active_account_id: &AccountId,
-    ) -> Result<bool, DbError> {
-        let now = Utc::now();
-        let res = sqlx::query(
-            "UPDATE bindings SET active_account_id = $1, updated_at = $2
-             WHERE weixin_user_id = $3",
-        )
-        .bind(active_account_id.as_str())
-        .bind(&now)
-        .bind(user.as_str())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx binding rebind: {e}")))?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    pub async fn delete(&self, user: &WeixinUserId) -> Result<bool, DbError> {
-        let res = sqlx::query("DELETE FROM bindings WHERE weixin_user_id = $1")
-            .bind(user.as_str())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| DbError::Pool(format!("sqlx binding delete: {e}")))?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    pub async fn list(&self) -> Result<Vec<Binding>, DbError> {
-        let rows: Vec<(String, String, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT weixin_user_id, active_account_id, agent_id, updated_at
-             FROM bindings ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx binding list: {e}")))?;
-        Ok(rows
-            .into_iter()
-            .map(|(u, a, g, t)| Binding {
-                weixin_user_id: WeixinUserId::new(u),
-                active_account_id: AccountId::new(a),
-                agent_id: g,
-                updated_at: ts::format_rfc3339(&t),
-            })
-            .collect())
-    }
-
-    pub async fn count(&self) -> Result<u64, DbError> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM bindings")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| DbError::Pool(format!("sqlx binding count: {e}")))?;
-        Ok(row.0.max(0) as u64)
-    }
+    // v7.0 housekeeping: removed `set_active_account`, `delete`, `list`,
+    // `count` — all zero callers. WeChat sender binding is currently
+    // strictly "first account wins, sticky forever" via `register_or_touch`
+    // + `get`. Multi-account-per-user rebind / per-tenant list views
+    // would need to re-add these (revive from git).
 }
 
 #[cfg(test)]
@@ -164,22 +115,6 @@ mod tests {
         assert_eq!(b.active_account_id.as_str(), "acct-1");
     }
 
-    #[tokio::test]
-    async fn set_active_account_force_rebind_async() {
-        let r = repo().await;
-        seed_account(&r.pool, "acct-1").await;
-        seed_account(&r.pool, "acct-2").await;
-        let user = WeixinUserId::new("o9@im");
-        r.register_or_touch(&user, &AccountId::new("acct-1"), "wx-abc")
-            .await
-            .unwrap();
-        assert!(r
-            .set_active_account(&user, &AccountId::new("acct-2"))
-            .await
-            .unwrap());
-        assert_eq!(
-            r.get(&user).await.unwrap().unwrap().active_account_id.as_str(),
-            "acct-2"
-        );
-    }
+    // v7.0 housekeeping: `set_active_account_force_rebind_async` removed
+    // alongside the `set_active_account` method.
 }

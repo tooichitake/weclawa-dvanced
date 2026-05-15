@@ -1,21 +1,32 @@
-//! Telegram bot poll loop — v5 M3.
+//! Telegram bot poll loop — v7.0 H1 (now real).
 //!
-//! Telegram getUpdates 长轮询：bot.poll_updates(token, _, offset) 返回
-//! 新 Update 数组 + 把 offset 推进到最后一个 update_id+1。
+//! Telegram getUpdates 长轮询：每轮调 `TelegramBot::poll_telegram_updates`
+//! 拿 `(Vec<Update>, new_offset)`，逐条 dispatch 给
+//! `puppet::telegram_handler::handle_inbound_update`，最后把 offset 持久化
+//! 进 `storage::sync_buf` 以便重启后从断点继续。
 //!
 //! ## 与 iLink poller 的差异
 //!
-//! - **endpoint**：`https://api.telegram.org/bot<token>/getUpdates`（已经在
-//!   [`crate::puppet::telegram::TelegramBot`] 写死），不用 base_url
-//! - **offset 状态**：用 `storage::sync_buf` 持久化 last update_id
-//! - **dispatch**：每条 Update → [`crate::puppet::telegram_handler::handle_inbound_update`]
+//! - **endpoint**：`https://api.telegram.org/bot<token>/getUpdates`，由
+//!   [`crate::puppet::telegram::TelegramBot`] 内部固定，参数 `base_url` 忽略
+//! - **offset 语义**：last `update_id` + 1。第一次调用传 0 表示 "从最旧
+//!   待传送的 update 开始"。Telegram 在我们 ack（下一次带 offset > N）
+//!   之后丢掉它的 N 及更小的缓冲——丢消息可能源于此，所以 offset 必须
+//!   在 dispatch 之前持久化才安全。
+//! - **空响应**：long-poll 25s 内没事件 → 返 `(Vec::new(), 不变 offset)`。
+//!   loop 不 sleep，立刻进下一轮。
+//! - **错误**：失败 → backoff 30s 再试，连续失败不会"自杀"——telegram
+//!   bot 没有 redeliver 概念，poll 必须保持活着。
 //!
-//! ## 简化点（v5 范围内）
+//! ## 不在本期做的
 //!
-//! v5 用 `bot.poll_updates` 当前的 stub return（empty GetUpdatesResp）。
-//! 真正的 Update 流式 mapping 在 [`crate::puppet::telegram::TelegramBot::poll_updates`]
-//! 真填后会自动 work。本 poller 在那之前是"占位骨架"——每 25s 调一次
-//! getUpdates，目前返空就 sleep 25s 继续。
+//! - **Webhook 模式**作为 long-poll 的替代（Telegram 推 events 进
+//!   `POST /api/v1/puppet/telegram/webhook/<id>`）。生产部署有 reverse-proxy
+//!   时更省资源，但 long-poll 不依赖 inbound 网络可达性，调试更友好。
+//! - **dedup gate 前置**到 offset 持久化之前——目前 handler 内部走
+//!   `dedup_async::mark_seen_scoped`，daemon 重启 + Telegram redeliver
+//!   能识别重复。但 offset 已经 ack 不重新发了，所以这不是问题；只有
+//!   "handler 处理一半 daemon 崩"才会丢，跟 iLink 一致行为。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,13 +36,16 @@ use tracing::{error, info, warn};
 
 use crate::auth::accounts::load_account;
 use crate::puppet::telegram::TelegramBot;
-use crate::puppet::MessagingPlatform;
 use crate::storage::sync_buf::{load_sync_buf, save_sync_buf};
 
 const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+/// Telegram long-poll 上限。Bot API 文档：50s 以下都行，建议 25-30s
+/// 给 reqwest 30s connection timeout 留 buffer。
+const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 
 /// Spawn 一个 Telegram bot 的 long-poll loop。每次 getUpdates 返回非空
-/// Update 时调 telegram_handler::handle_inbound_update 处理。
+/// Update 时为每条调 [`crate::puppet::telegram_handler::handle_inbound_update`]
+/// 处理。
 pub async fn run_telegram_monitor(
     bot: Arc<TelegramBot>,
     account_id: String,
@@ -55,10 +69,12 @@ pub async fn run_telegram_monitor(
         }
     };
 
-    let mut offset = load_sync_buf(&account_id).unwrap_or_default();
-    if offset.is_empty() {
-        offset = "0".to_string();
-    }
+    // offset 从 sync_buf 取（重启续传）。空 / 非数字 → 0 表示从头拉
+    // 所有待传送 update。
+    let mut offset: i64 = load_sync_buf(&account_id)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    info!("[{account_id}] telegram offset start = {offset}");
 
     loop {
         if *shutdown.borrow() {
@@ -66,29 +82,67 @@ pub async fn run_telegram_monitor(
             return;
         }
 
-        // tokio::select on shutdown so we don't block the 25s poll past drain.
         tokio::select! {
             _ = shutdown.changed() => {
                 info!("[{account_id}] telegram monitor shutdown received");
                 return;
             }
-            r = bot.poll_updates(&token, "", &offset) => {
+            r = bot.poll_telegram_updates(&token, offset, LONG_POLL_TIMEOUT_SECS) => {
                 match r {
-                    Ok(_resp) => {
-                        // v5: TelegramBot::poll_updates 当前返 stub default()
-                        // ── 真 Update parsing 在 puppet::telegram 真填后 yield 给
-                        // handle_inbound_update。本 loop 形态就位。
-                        // 下次 poll 之间留一下，否则空 poll 飙 CPU。
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    Ok((updates, new_offset)) => {
+                        if updates.is_empty() {
+                            // long-poll timed out with no events — loop
+                            // immediately, telegram is happy to be called
+                            // again right away (it just sat idle 25s).
+                            continue;
+                        }
+
+                        // Persist offset BEFORE dispatch so that if a
+                        // handler crashes mid-processing, restart resumes
+                        // *past* the crashed event (we'd rather drop a
+                        // message than infinite-loop on one that panics).
+                        // dedup_async at the handler layer catches genuine
+                        // duplicates if telegram redelivers due to
+                        // network blips before our ack lands.
+                        offset = new_offset;
+                        // `save_sync_buf` swallows fs errors internally
+                        // (best-effort) — already noisy via the file's
+                        // own tracing.
+                        save_sync_buf(&account_id, &offset.to_string());
+
+                        let count = updates.len();
+                        for update in updates {
+                            let bot_clone = Arc::clone(&bot);
+                            let token_clone = token.clone();
+                            let acct_clone = account_id.clone();
+                            // Spawn each dispatch so a slow handler can't
+                            // back-pressure the poll loop — telegram has
+                            // strict redelivery semantics tied to offset
+                            // ack, we already ack'd.
+                            tokio::spawn(async move {
+                                crate::puppet::telegram_handler::handle_inbound_update(
+                                    bot_clone, &update, &acct_clone, &token_clone,
+                                )
+                                .await;
+                            });
+                        }
+                        info!("[{account_id}] telegram dispatched {count} update(s), offset → {offset}");
                     }
                     Err(e) => {
-                        warn!("[{account_id}] telegram poll: {e} (back off {:?})", FAILURE_BACKOFF);
-                        tokio::time::sleep(FAILURE_BACKOFF).await;
+                        warn!(
+                            "[{account_id}] telegram poll: {e} (back off {:?})",
+                            FAILURE_BACKOFF
+                        );
+                        tokio::select! {
+                            _ = tokio::time::sleep(FAILURE_BACKOFF) => {}
+                            _ = shutdown.changed() => {
+                                info!("[{account_id}] telegram monitor shutdown during backoff");
+                                return;
+                            }
+                        }
                     }
                 }
             }
         }
-
-        let _ = save_sync_buf(&account_id, &offset);
     }
 }

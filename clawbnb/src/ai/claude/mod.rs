@@ -28,16 +28,10 @@ use tracing::{debug, warn};
 use crate::ai::{ClaudeOutput, CliConfig};
 use crate::sandbox::Sandbox;
 
-/// Legacy entry point — composite prompt (system + user concatenated)
-/// piped through stdin. Kept so callers that don't want to split (e.g.
-/// codex path) keep working. New callers should prefer `invoke_with_system`.
-pub async fn invoke(
-    cfg: &CliConfig,
-    sandbox: &Sandbox,
-    prompt: &str,
-) -> Result<ClaudeOutput, String> {
-    invoke_with_system(cfg, sandbox, "", prompt).await
-}
+// v7.0 housekeeping: legacy `invoke(cfg, sandbox, prompt)` entry point
+// removed — zero callers (the codex path it was kept for now also goes
+// through `invoke_with_system` with empty system prompt). Call sites
+// should always specify system + user explicitly.
 
 /// Spawn `claude` inside the user's sandbox.
 ///

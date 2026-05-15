@@ -87,13 +87,9 @@ impl SqlxAuditRepo {
             .await
     }
 
-    pub async fn count(&self) -> Result<u64, DbError> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_log")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| DbError::Pool(format!("sqlx audit count: {e}")))?;
-        Ok(row.0.max(0) as u64)
-    }
+    // v7.0 housekeeping: `count` removed — no production caller. Audit
+    // table size is observable via `pg_total_relation_size`/Grafana, no
+    // need for an app-level count.
 }
 
 #[cfg(test)]
@@ -106,9 +102,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_and_count_async() {
+    async fn record_round_trip_async() {
         let r = repo().await;
-        assert_eq!(r.count().await.unwrap(), 0);
+        assert!(r.list_recent(10).await.unwrap().is_empty());
         // v7.0: actor_key_id is UUID — must be a parseable uuid string,
         // else treated as None (system actor).
         let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
@@ -122,7 +118,9 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(r.count().await.unwrap(), 1);
+        let entries = r.list_recent(10).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "users.delete");
     }
 
     #[tokio::test]

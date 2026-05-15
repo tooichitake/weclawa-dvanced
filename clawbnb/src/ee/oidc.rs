@@ -1,5 +1,30 @@
 //! OIDC (OpenID Connect) Identity Provider — v3.3 F3.
 //!
+//! # SECURITY: routes not mounted yet
+//!
+//! The cryptographic verify path is complete (see
+//! [`crate::ee::jwks::verify_id_token`] — RS256/ES256 + JWKS cache +
+//! iss/aud/exp/nonce checks). **What's missing before mounting
+//! `/api/v1/auth/sso/oidc/{init,callback}` into axum** (plan v3 M2 scope):
+//!
+//! 1. Per-tenant `OidcConfig` storage — needs `tenants.oidc_config_json`
+//!    column (migration V0013) + admin GUI form to write it.
+//! 2. Session storage for `state`/`nonce`/`code_verifier` between
+//!    `init` and `callback` — pick: signed-cookie (tower-cookies +
+//!    HMAC key reused from BotToken AES key) OR DB table
+//!    `oidc_sessions(state, ..., expires_at)`.
+//! 3. JIT provisioning policy: who can self-register? Default `read_only`
+//!    role, super_admin promotion via admin GUI — but the mapping from
+//!    IdP `email`/`groups` claim → weclawbot role needs explicit
+//!    operator opt-in (else any IdP user with valid email becomes
+//!    read_only on this daemon).
+//! 4. `decode_id_token_unverified` (in `oidc_callback.rs`) must be made
+//!    private or deleted — public unverified decode is a footgun. The
+//!    callback route should call `verify_id_token` exclusively.
+//!
+//! Until all four land, the OIDC flow stays unreachable. The crypto
+//! primitives below are tested in isolation and ready to plug in.
+//!
 //! 通用 OIDC 适配 Okta / Azure AD / Google Workspace / Auth0 等。每个
 //! tenant 一份 [`OidcConfig`]（issuer URL + client_id + client_secret +
 //! redirect_uri），存 tenants 表的 `sso_config_json` 列（v3.4 schema 加）。

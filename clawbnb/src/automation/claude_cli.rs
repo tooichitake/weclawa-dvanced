@@ -48,16 +48,14 @@ pub struct ClaudeSession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
     screen: Arc<Mutex<vt100::Parser>>,
-    raw: Arc<Mutex<Vec<u8>>>,
     last_byte_at: Arc<Mutex<Instant>>,
 }
 
 impl ClaudeSession {
-    /// Spawn `claude` directly on the host (operator's claude install).
-    /// Used during preflight to enumerate plugin set / config schema.
-    pub fn spawn_host() -> Result<Self, String> {
-        spawn_inner("claude", &[], None)
-    }
+    // v7.0 housekeeping: `spawn_host()` removed — never called (host-side
+    // claude preflight is done via a one-shot subprocess in
+    // `sandbox::preflight`, not a long-lived PTY). Restore from git if a
+    // future `weclawbot plugins list-host` command needs it.
 
     /// Spawn `podman run ... <image> claude` for a given user sandbox.
     /// Plugin installs land in that sandbox's writable plugins/ dir.
@@ -139,9 +137,9 @@ impl ClaudeSession {
         }
     }
 
-    pub fn raw_dump(&self) -> Vec<u8> {
-        self.raw.lock().unwrap().clone()
-    }
+    // v7.0 housekeeping: `raw_dump()` removed — was a debug aid for
+    // capturing raw VT100 bytes during plugin-install regressions; the
+    // current `wait_for_any` error already includes a screen tail.
 
     fn detect_approval_prompt(&self, text: &str) -> Option<String> {
         for pattern in [
@@ -218,11 +216,9 @@ fn spawn_inner(
     let writer = pair.master.take_writer().map_err(|e| format!("take writer: {e}"))?;
 
     let screen = Arc::new(Mutex::new(vt100::Parser::new(40, 120, 0)));
-    let raw = Arc::new(Mutex::new(Vec::<u8>::with_capacity(64 * 1024)));
     let last_byte_at = Arc::new(Mutex::new(Instant::now()));
 
     let screen_for_thread = Arc::clone(&screen);
-    let raw_for_thread = Arc::clone(&raw);
     let last_for_thread = Arc::clone(&last_byte_at);
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -233,10 +229,6 @@ fn spawn_inner(
                     {
                         let mut s = screen_for_thread.lock().unwrap();
                         s.process(&buf[..n]);
-                    }
-                    {
-                        let mut r = raw_for_thread.lock().unwrap();
-                        r.extend_from_slice(&buf[..n]);
                     }
                     *last_for_thread.lock().unwrap() = Instant::now();
                 }
@@ -252,7 +244,6 @@ fn spawn_inner(
         child,
         writer,
         screen,
-        raw,
         last_byte_at,
     })
 }

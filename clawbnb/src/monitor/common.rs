@@ -64,14 +64,11 @@ pub struct CommonInbound {
     pub attachments: Vec<PathBuf>,
 }
 
-/// 协议无关的回复表示。各 platform handler 把它转成原生回复发出。
-#[derive(Debug, Clone, Default)]
-pub struct CommonReply {
-    pub text: Option<String>,
-    pub files: Vec<PathBuf>,
-    /// Provider 名（"webhook" / "ai-cli" / "ai-api" / "echo"），audit 用。
-    pub provider_used: &'static str,
-}
+// v7.0 housekeeping: `CommonReply` struct removed — never constructed.
+// Each provider in `crate::ai::provider::ReplyProvider` returns its own
+// concrete `ProviderOutput` type, which platform handlers consume
+// directly. The "common reply" abstraction layer was a stale plan from
+// v2.2 L2.2 that didn't survive into the actual ReplyProvider impl.
 
 /// v3.1: 共通处理链真实施 — protocol-agnostic 部分（rate_limit +
 /// dispatch_reply）。

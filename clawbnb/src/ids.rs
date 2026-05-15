@@ -57,8 +57,11 @@ macro_rules! id_newtype {
             pub fn as_str(&self) -> &str { &self.0 }
             #[inline]
             pub fn into_string(self) -> String { self.0 }
-            #[inline]
-            pub fn is_empty(&self) -> bool { self.0.is_empty() }
+            // v7.0 housekeeping: macro-generated `is_empty()` removed —
+            // zero callers on any of the four newtypes (`AccountId`,
+            // `UserHash`, `WeixinUserId`, `BaseUrl`). Callers test the
+            // underlying `String` directly via `.as_str().is_empty()`
+            // when needed.
         }
 
         impl AsRef<str> for $name {
@@ -133,10 +136,7 @@ impl BotToken {
     pub fn expose(&self) -> &str {
         &self.0
     }
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
+    // v7.0 housekeeping: `is_empty()` removed — zero callers.
 }
 
 impl fmt::Debug for BotToken {

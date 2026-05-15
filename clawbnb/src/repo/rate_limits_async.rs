@@ -1,10 +1,8 @@
 //! AsyncRateLimitRepo — v7.0 window_start_ts TIMESTAMPTZ.
 
-use chrono::{DateTime, Utc};
 use crate::storage::db_async::AsyncDbPool;
 use crate::storage::ts;
 
-use crate::repo::rate_limits::WindowCount;
 use crate::storage::db::DbError;
 
 pub struct SqlxRateLimitRepo {
@@ -44,28 +42,9 @@ impl SqlxRateLimitRepo {
         Ok(row.0.max(0) as u64)
     }
 
-    pub async fn get(&self, scope_key: &str, window_start_ts: &str) -> Result<u64, DbError> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT count FROM rate_limits WHERE scope_key = $1 AND window_start_ts = $2",
-        )
-        .bind(scope_key)
-        .bind(ts::parse_rfc3339(window_start_ts))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx rate get: {e}")))?;
-        Ok(row.map(|r| r.0.max(0) as u64).unwrap_or(0))
-    }
-
-    pub async fn sum_for_scope(&self, scope_key: &str) -> Result<u64, DbError> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(count), 0)::BIGINT FROM rate_limits WHERE scope_key = $1",
-        )
-        .bind(scope_key)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx rate sum: {e}")))?;
-        Ok(row.0.max(0) as u64)
-    }
+    // v7.0 housekeeping: `get`, `sum_for_scope`, `list_scope` removed —
+    // production `monitor::rate_limit` only calls `increment` (atomic
+    // get-after-increment) + `prune_older_than` (1% lazy prune).
 
     pub async fn prune_older_than(&self, cutoff: &str) -> Result<u64, DbError> {
         let res = sqlx::query("DELETE FROM rate_limits WHERE window_start_ts < $1")
@@ -74,25 +53,6 @@ impl SqlxRateLimitRepo {
             .await
             .map_err(|e| DbError::Pool(format!("sqlx rate prune: {e}")))?;
         Ok(res.rows_affected())
-    }
-
-    pub async fn list_scope(&self, scope_key: &str) -> Result<Vec<WindowCount>, DbError> {
-        let rows: Vec<(String, DateTime<Utc>, i64)> = sqlx::query_as(
-            "SELECT scope_key, window_start_ts, count FROM rate_limits
-             WHERE scope_key = $1 ORDER BY window_start_ts DESC",
-        )
-        .bind(scope_key)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx rate list: {e}")))?;
-        Ok(rows
-            .into_iter()
-            .map(|(s, w, c)| WindowCount {
-                scope_key: s,
-                window_start_ts: ts::format_rfc3339(&w),
-                count: c.max(0) as u64,
-            })
-            .collect())
     }
 }
 
@@ -129,12 +89,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn sum_for_scope_aggregates_async() {
-        let r = repo().await;
-        r.increment("ai:acct-1", "2026-05-13T16:48:00Z").await.unwrap();
-        r.increment("ai:acct-1", "2026-05-13T16:48:00Z").await.unwrap();
-        r.increment("ai:acct-1", "2026-05-13T16:49:00Z").await.unwrap();
-        assert_eq!(r.sum_for_scope("ai:acct-1").await.unwrap(), 3);
-    }
+    // v7.0 housekeeping: `sum_for_scope_aggregates_async` removed alongside
+    // the `sum_for_scope` method.
 }

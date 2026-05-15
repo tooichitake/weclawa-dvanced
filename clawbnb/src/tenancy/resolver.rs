@@ -49,16 +49,9 @@ pub fn resolve_tenant_for_account(account_id: &str) -> TenantId {
     })
 }
 
-/// 校验 tenant 当前是否允许处理 inbound (sync 入口)。
-pub fn tenant_is_active(tenant_id: &TenantId) -> bool {
-    block_on_async(async {
-        let Some(apool) = crate::storage::db_async::try_global_async_pool() else {
-            return true;
-        };
-        let repo = SqlxTenantRepo::new(apool);
-        repo.is_active(tenant_id).await.unwrap_or(true)
-    })
-}
+// v7.0 housekeeping: sync `tenant_is_active` removed — all callers
+// migrated to `tenant_is_active_async`. The sync wrapper plus its
+// `block_on_async` cost were pure dead weight.
 
 /// v4 J5: async 版本（直接 sqlx pool）。
 pub async fn tenant_is_active_async(tenant_id: &TenantId) -> bool {
@@ -80,9 +73,9 @@ mod tests {
         assert!(t.is_default());
     }
 
-    #[test]
-    fn is_active_returns_true_when_pool_unavailable() {
-        // 同上，pool 不可用时放行。
-        assert!(tenant_is_active(&TenantId::default_tenant()));
+    #[tokio::test]
+    async fn is_active_returns_true_when_pool_unavailable_async() {
+        // pool 不可用时放行（fail-open）。
+        assert!(tenant_is_active_async(&TenantId::default_tenant()).await);
     }
 }

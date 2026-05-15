@@ -78,29 +78,14 @@ pub fn get_field(user_hash: &str, path: &[&str]) -> Option<Value> {
     Some(cur)
 }
 
-/// Append `value` to an array at `path` if not already present.
-pub fn array_add_unique(user_hash: &str, path: &[&str], value: Value) -> Result<(), String> {
-    if path_is_blocked(path) {
-        return Err(format!("path {:?} is protected and cannot be edited via the console", path));
-    }
-    let mut root = read_settings(user_hash)?;
-    json_path::array_add_unique(&mut root, path, value)?;
-    write_settings(user_hash, &root)
-}
-
-/// Remove all occurrences of `value` from an array at `path`. No-op if the
-/// path doesn't resolve to an array.
-pub fn array_remove(user_hash: &str, path: &[&str], value: &Value) -> Result<bool, String> {
-    if path_is_blocked(path) {
-        return Err(format!("path {:?} is protected and cannot be edited via the console", path));
-    }
-    let mut root = read_settings(user_hash)?;
-    let changed = json_path::array_remove(&mut root, path, value)?;
-    if changed {
-        write_settings(user_hash, &root)?;
-    }
-    Ok(changed)
-}
+// v7.0 housekeeping: `array_add_unique` / `array_remove` removed —
+// the WeChat menu doesn't currently expose any list-management commands,
+// so the wrappers had zero callers. The lower-level helpers in
+// `storage::json_path` were also removed for the same reason. If a
+// future menu command needs list-add/remove, re-add the wrapper here
+// (the `path_is_blocked` check must come back too) and the underlying
+// `serde_json::Value::as_array_mut` is enough — no need to revive a
+// dedicated helper module.
 
 #[cfg(test)]
 mod tests {

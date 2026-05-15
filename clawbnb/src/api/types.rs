@@ -250,7 +250,6 @@ pub struct GetUploadUrlResp {
 pub const UPLOAD_MEDIA_TYPE_IMAGE: i32 = 1;
 pub const UPLOAD_MEDIA_TYPE_VIDEO: i32 = 2;
 pub const UPLOAD_MEDIA_TYPE_FILE: i32 = 3;
-#[allow(dead_code)]
 pub const UPLOAD_MEDIA_TYPE_VOICE: i32 = 4;
 
 // --- Message type constants ---

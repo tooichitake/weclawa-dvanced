@@ -1,11 +1,34 @@
-// v7.0: many `#[derive(Deserialize)]` API response structs have fields
-// (`ret`, `errmsg`, `longpolling_timeout_ms`, etc.) we read from the
-// wire but never consume — they're kept so we can deserialize the full
-// JSON without dropping fields silently. Same for trait-method stubs
-// (`spawn_host`, `raw_dump`) reserved for future protocol features.
-// Globally allowing dead-code keeps the build green without sprinkling
-// 30+ `#[allow(dead_code)]` attrs; real unused code is still caught by
-// clippy's stricter sub-lints if we enable them later.
+// v7.0 audit-aware `#![allow(dead_code)]`. After the v7 housekeeping
+// dead-code sweep (which deleted ~600 LoC and trimmed compiler warnings
+// from 113 → 48), the residual warnings fall into four legitimate
+// categories that we don't want to delete:
+//
+// 1. `#[derive(Deserialize)]` fields on API response structs
+//    (`ret`, `errmsg`, `longpolling_timeout_ms`, `thumb_upload_param`,
+//    `attachments`, …) — kept so we deserialize the full upstream JSON
+//    without silently dropping fields. Removing them risks losing
+//    information when iLink/Telegram/Discord adds a field we *do* need.
+// 2. Multi-protocol puppet scaffold under `src/puppet/{discord,telegram,
+//    feishu,mock}*.rs` — type-system commitment to v3 SaaS protocols,
+//    typed but not yet wired into the runtime poller. Deleting these
+//    would force a from-scratch re-design when we add the second
+//    protocol; allowing dead-code preserves the abstraction.
+// 3. `MessagingPlatform` trait methods (`platform_id`, `send_file`,
+//    `send_typing`, `supports_qr_login`, `fetch_qr_code`,
+//    `poll_qr_status`) — abstract surface. The default iLink poller
+//    only calls a subset; future Discord/Telegram impls will fill in
+//    the rest.
+// 4. Test-only constructions of stable taxonomies (`TenantId::is_default`,
+//    `WeclawError::{BadRequest,Unauthorized,Forbidden,NotFound,Conflict,
+//    RateLimited}`) — `cfg(test)` constructors don't satisfy the release
+//    build's "never constructed" check, but the variants are matched in
+//    `http_status`/`problem_type`/`problem_title` and exercised by unit
+//    tests. Deleting them would force re-adding the moment a new
+//    handler needs to return 403.
+//
+// Real new dead code is now rare enough that a future tightening can
+// switch this to per-file allows + a `cargo clippy -- -D dead_code` CI
+// gate. Until then, the global allow is the pragmatic call.
 #![allow(dead_code)]
 
 mod ai;

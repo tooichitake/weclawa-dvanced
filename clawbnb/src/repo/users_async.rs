@@ -169,15 +169,10 @@ impl SqlxUserRepo {
             .map(|_| ())
     }
 
-    pub async fn get_settings_version(&self, hash: &UserHash) -> Result<Option<i64>, DbError> {
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT version FROM user_settings WHERE user_hash = $1")
-                .bind(hash.as_str())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| DbError::Pool(format!("sqlx settings ver: {e}")))?;
-        Ok(row.map(|r| r.0))
-    }
+    // v7.0 housekeeping: `get_settings_version` removed — no caller.
+    // The version column on `user_settings` is still bumped (used by
+    // `sandbox::materialize` to detect "DB > on-disk version" copies),
+    // but no read path needs the raw integer value.
 
     pub async fn upsert_settings_bump_version(
         &self,
@@ -260,16 +255,9 @@ impl SqlxUserRepo {
         Ok(res.rows_affected())
     }
 
-    pub async fn history_count(&self, hash: &UserHash) -> Result<u64, DbError> {
-        // v7.0: COUNT(*) returns BIGINT in PG.
-        let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM user_history WHERE user_hash = $1")
-                .bind(hash.as_str())
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| DbError::Pool(format!("sqlx history count: {e}")))?;
-        Ok(row.0.max(0) as u64)
-    }
+    // v7.0 housekeeping: `history_count` removed — no caller. If a
+    // future API needs to surface "N turns" on the user list page, revive
+    // it (and add a `created_at` index if performance matters).
 
     // ===== console_session =====
 
@@ -400,7 +388,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v2, 2);
-        assert_eq!(r.get_settings_version(&hash).await.unwrap(), Some(2));
     }
 
     #[tokio::test]
@@ -428,6 +415,7 @@ mod tests {
 
         assert!(r.delete(&hash).await.unwrap());
         assert!(r.get_settings(&hash).await.unwrap().is_none());
-        assert_eq!(r.history_count(&hash).await.unwrap(), 0);
+        // history rows gone too (verified by recent_history returning empty)
+        assert!(r.recent_history(&hash, 10).await.unwrap().is_empty());
     }
 }

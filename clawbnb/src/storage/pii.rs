@@ -128,27 +128,9 @@ pub fn redact(input: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// Return a `Vec<PiiClass>` of every class detected (for metric labelling
-/// / audit summarisation). Order = `classes` traversal above; each class
-/// at most once.
-pub fn detect(input: &str) -> Vec<PiiClass> {
-    let mut hits = Vec::new();
-    for class in [
-        PiiClass::Email,
-        PiiClass::PhoneCn,
-        PiiClass::IdCardCn,
-        PiiClass::BankCard,
-        PiiClass::Ipv4,
-        PiiClass::LicensePlateCn,
-        PiiClass::WechatId,
-        PiiClass::QqId,
-    ] {
-        if regex_for(class).is_match(input) {
-            hits.push(class);
-        }
-    }
-    hits
-}
+// v7.0 housekeeping: `detect()` removed — only `redact()` is used in
+// production (`monitor::webhook::dispatch`). The newer `crate::pii`
+// module's `detect_classes` covers the metric-labelling use case.
 
 fn regex_for(c: PiiClass) -> &'static Regex {
     match c {
@@ -257,11 +239,6 @@ mod tests {
         assert!(matches!(r, std::borrow::Cow::Borrowed(_)));
     }
 
-    #[test]
-    fn detect_lists_multiple_classes() {
-        let hits = detect("phone 13912345678 email foo@bar.com ip 1.2.3.4");
-        assert!(hits.contains(&PiiClass::PhoneCn));
-        assert!(hits.contains(&PiiClass::Email));
-        assert!(hits.contains(&PiiClass::Ipv4));
-    }
+    // v7.0 housekeeping: `detect_lists_multiple_classes` removed
+    // alongside the `detect` function.
 }

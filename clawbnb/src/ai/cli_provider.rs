@@ -26,21 +26,10 @@ use crate::ai::history::{append, recent};
 use crate::media::inbound::InboundContent;
 use crate::sandbox::Sandbox;
 
-/// Single-shot text completion (no attachments, no streaming). Used by
-/// internal callers that want a string reply only.
-pub async fn complete(
-    cfg: &CliConfig,
-    sandbox: &Sandbox,
-    user_text: &str,
-) -> Result<String, String> {
-    let content = InboundContent {
-        text: user_text.to_string(),
-        ..Default::default()
-    };
-    complete_with_content(cfg, sandbox, &content)
-        .await
-        .map(|o| o.text)
-}
+// v7.0 housekeeping: the `complete(cfg, sandbox, user_text)` convenience
+// wrapper (text-only, no attachments) was removed — zero callers.
+// `ReplyProvider` always builds an `InboundContent` (even text-only
+// inbound has empty `attachments`) and goes through `complete_with_content`.
 
 /// Full multi-modal completion. Per-user state lives in `sandbox`.
 /// Returns text plus any files / URLs the provider declared via MCP.

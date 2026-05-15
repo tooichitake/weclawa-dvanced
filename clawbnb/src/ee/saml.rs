@@ -1,5 +1,34 @@
 //! SAML 2.0 SSO — v3.6 I4 ee enterprise feature.
 //!
+//! # SECURITY: NOT PRODUCTION-READY YET
+//!
+//! **DO NOT mount the SAML routes (`/api/v1/auth/sso/saml/*`) into the
+//! axum router until `verify_saml_response` properly verifies the
+//! IdP's XML signature.** Currently `verify_saml_response_basic` only
+//! validates timestamps and entity IDs; it does NOT check the
+//! `<ds:Signature>` block. Any attacker who can POST to the SP ACS
+//! endpoint can forge a SAMLResponse claiming to be from the IdP and
+//! impersonate any user.
+//!
+//! What's needed to finish (plan v3.7+ scope):
+//! - Pick a Rust XML-DSig crate (`signed-xml`? `xmlsec-rs`? Or shell out
+//!   to `xmlsec1` C binary?). Rust ecosystem here is weak — most projects
+//!   wrap `xmlsec1` via FFI.
+//! - Implement canonicalization (C14N) — XML-DSig requires the signed
+//!   element be C14N'd before hash, and the spec has subtle rules
+//!   around namespace prefixes / whitespace.
+//! - Validate certificate chain against operator-configured IdP cert
+//!   (stored in tenants.saml_config_json).
+//! - Add anti-replay (track seen response IDs for the assertion's
+//!   lifetime).
+//! - Re-audit `decode_saml_response` for XXE: the current quick-xml
+//!   parser is XXE-safe by default, but any switch to a DOM parser
+//!   must explicitly disable external entities.
+//!
+//! Tracking: see GitHub issues tagged `saml` and `sso`. Until those
+//! land, leave the SAML implementation gated behind `ee` feature and
+//! unrouted.
+//!
 //! ## 设计取舍
 //!
 //! - 我们是 **SP (Service Provider)** 角色，operator IdP 是 Okta/AD FS/

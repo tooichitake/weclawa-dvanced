@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::storage::db::DbError;
 use crate::storage::db_async::AsyncDbPool;
-use crate::tenancy::{TenantId, TenantStatus};
+use crate::tenancy::TenantId;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct AsyncTenant {
@@ -21,11 +21,8 @@ pub struct AsyncTenant {
     pub last_billing_event_at: Option<DateTime<Utc>>,
 }
 
-impl AsyncTenant {
-    pub fn status_enum(&self) -> TenantStatus {
-        TenantStatus::from_str(&self.status).unwrap_or(TenantStatus::Active)
-    }
-}
+// v7.0 housekeeping: `AsyncTenant::status_enum` removed (zero callers;
+// `is_active` does the enum check internally now).
 
 pub struct SqlxTenantRepo {
     pool: AsyncDbPool,
@@ -36,17 +33,9 @@ impl SqlxTenantRepo {
         Self { pool }
     }
 
-    pub async fn get(&self, id: &TenantId) -> Result<Option<AsyncTenant>, DbError> {
-        sqlx::query_as::<_, AsyncTenant>(
-            "SELECT id, name, created_at, status, stripe_customer_id, deleted_at,
-                    billing_status, billing_period_end, last_billing_event, last_billing_event_at
-             FROM tenants WHERE id = $1",
-        )
-        .bind(id.as_str())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx get tenant: {e}")))
-    }
+    // v7.0 housekeeping: `get(id)` removed — production code only needs
+    // `is_active` / `find_by_stripe_customer` / `update_billing_status`.
+    // A future tenants-list admin UI would re-add it.
 
     /// 是否允许处理 inbound — `status='active'` AND
     /// (`billing_status='active'` OR

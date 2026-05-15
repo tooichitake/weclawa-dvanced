@@ -29,8 +29,9 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::auth::admin_key::{verify_and_load_async, AdminContext};
-use crate::repo::admin_keys::Role;
+use crate::auth::admin_key::verify_and_load_async;
+#[cfg(test)]
+use crate::auth::admin_key::AdminContext;
 
 /// Middleware: require a valid `Authorization: Bearer ...` header, attach
 /// the resolved `AdminContext` to request extensions.
@@ -65,30 +66,14 @@ pub async fn bearer_auth(mut req: Request<Body>, next: Next) -> Result<Response,
     Ok(next.run(req).await)
 }
 
-/// Middleware factory: enforce that the request's `AdminContext.role` is
-/// at least `min`. Must run *after* `bearer_auth` in the layer stack.
-pub fn require_role(
-    min: Role,
-) -> impl Fn(Request<Body>, Next) -> futures_util::future::BoxFuture<'static, Result<Response, Response>>
-       + Clone
-       + Send
-       + Sync
-       + 'static {
-    move |req: Request<Body>, next: Next| {
-        let min = min;
-        Box::pin(async move {
-            let ok = req
-                .extensions()
-                .get::<AdminContext>()
-                .map(|ctx| ctx.role.allows(min))
-                .unwrap_or(false);
-            if !ok {
-                return Err(forbidden(&format!("role below required minimum {:?}", min)));
-            }
-            Ok(next.run(req).await)
-        })
-    }
-}
+// v7.0 housekeeping: `require_role` factory + `forbidden` helper removed.
+// `service::admin` hand-rolls its own per-route role check (see comment
+// at admin.rs:10 — axum's nested-router type erasure made the layer
+// factory clumsy). When we get a second route that needs RBAC, revive
+// the factory then; until then it was zero-caller dead weight.
+//
+// `Role` is still re-exported from `crate::repo::admin_keys` for the
+// hand-rolled checks.
 
 fn unauthorized(detail: &str) -> Response {
     (
@@ -98,19 +83,6 @@ fn unauthorized(detail: &str) -> Response {
             "type": "https://weclawbot.dev/errors/unauthorized",
             "title": "Unauthorized",
             "status": 401,
-            "detail": detail,
-        })),
-    )
-        .into_response()
-}
-
-fn forbidden(detail: &str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "type": "https://weclawbot.dev/errors/forbidden",
-            "title": "Forbidden",
-            "status": 403,
             "detail": detail,
         })),
     )
@@ -192,13 +164,6 @@ mod tests {
     // the unit tests in `auth::admin_key`; this module focuses on the
     // axum integration shape (header parsing, response formatting).
 
-    #[test]
-    fn require_role_factory_returns_callable() {
-        // Smoke check: building the layer doesn't panic and is generic
-        // over role. Real RBAC behaviour is tested via admin_key unit
-        // tests (role.allows()) — keeping this side compile-only avoids
-        // re-testing the OnceLock-bound global pool path.
-        let _layer = require_role(Role::SuperAdmin);
-        let _layer2 = require_role(Role::ReadOnly);
-    }
+    // v7.0 housekeeping: the `require_role_factory_returns_callable`
+    // smoke test was removed alongside the `require_role` factory.
 }

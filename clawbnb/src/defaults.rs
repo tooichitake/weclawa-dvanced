@@ -159,7 +159,6 @@ pub fn apply_defaults_to_user(user_hash: &str) -> Result<Option<Value>, String> 
     Ok(old)
 }
 
-#[allow(dead_code)]
 pub fn user_settings_path(user_hash: &str) -> PathBuf {
     layout::user_settings_path(user_hash)
 }

@@ -39,6 +39,15 @@ use serde_json::{json, Value};
 
 use crate::storage::db::DbError;
 
+// v7.0 housekeeping: six variants (`BadRequest`, `Unauthorized`,
+// `Forbidden`, `NotFound`, `Conflict`, `RateLimited`) are kept as a
+// stable RFC-7807 error taxonomy even though no production path
+// constructs them yet — they're matched in `http_status`/`problem_type`/
+// `problem_title` and exercised in unit tests, but `cfg(test)`
+// constructions don't satisfy the compiler's "never constructed"
+// check. Allowing dead_code at the enum makes the intent explicit and
+// keeps future handler additions ergonomic.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum WeclawError {
     #[error("database: {0}")]
@@ -126,12 +135,17 @@ impl WeclawError {
     /// Whether the poller should retry after backoff. Anything network /
     /// rate-limit / upstream-with-retriable-hint is retriable; logic
     /// errors (400/401/403/404/409) are not.
+    ///
+    /// v7.0 audit note: no production caller currently gates retry on
+    /// this — the iLink poller does its own status-code inspection at
+    /// the HTTP layer. Kept because it's exercised by unit tests and
+    /// is the canonical place to extend with a generic retry middleware.
     pub fn is_retriable(&self) -> bool {
         match self {
             Self::Network(_) => true,
             Self::RateLimited(_) => true,
             Self::IlinkApi { retriable, .. } => *retriable,
-            Self::Internal(_) => true, // unknown — retry once is reasonable
+            Self::Internal(_) => true,
             _ => false,
         }
     }
@@ -217,8 +231,9 @@ impl IntoResponse for WeclawError {
     }
 }
 
-/// Convenience alias for the common case.
-pub type WeclawResult<T> = std::result::Result<T, WeclawError>;
+// v7.0 housekeeping: `WeclawResult<T>` alias removed — every callsite
+// writes the full `Result<T, WeclawError>` explicitly. The alias saved
+// 12 characters per signature and obscured the underlying type.
 
 #[cfg(test)]
 mod tests {
@@ -306,7 +321,7 @@ mod tests {
         // The conversion compiles — that's the actual coverage we want
         // from this test. Constructing a `DbError` directly through
         // public constructors is the cleanest way.
-        let dbe = DbError::NotFound;
+        let dbe = DbError::Pool("test".into());
         let we: WeclawError = dbe.into();
         assert!(matches!(we, WeclawError::Db(_)));
         assert_eq!(we.http_status(), StatusCode::INTERNAL_SERVER_ERROR);

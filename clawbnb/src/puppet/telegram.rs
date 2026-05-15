@@ -33,6 +33,7 @@ use reqwest::Client;
 
 use crate::api::types::{GetUpdatesResp, QrCodeResponse, QrStatusResponse};
 use crate::error::WeclawError;
+use crate::puppet::telegram_inbound::Update;
 use crate::puppet::{MessagingPlatform, OutboundMessage};
 
 /// Telegram Bot client. Token 是 BotFather 给的 `123456:ABC-...`。
@@ -55,6 +56,65 @@ impl TelegramBot {
     /// Build a Telegram Bot API URL: `https://api.telegram.org/bot<token>/<method>`.
     fn url(token: &str, method: &str) -> String {
         format!("https://api.telegram.org/bot{token}/{method}")
+    }
+
+    /// v7.0 H1: 真 long-poll Telegram getUpdates.
+    ///
+    /// 返回 `(updates, new_offset)`：
+    /// - `updates`：本次拉到的所有 Update（按 update_id 升序）。空 vec
+    ///   表示 25s 内没新事件——caller 应继续下一轮 poll，不要 sleep。
+    /// - `new_offset`：下次调用应传的 offset。Telegram 约定 offset =
+    ///   max(update_id) + 1 表示"以下的全 ack 了，下次别再推"。空 vec
+    ///   时返回入参 offset 不变。
+    ///
+    /// `timeout_secs` 是 long-poll 上限，建议 25 秒（小于 reqwest 30s
+    /// connection timeout）。
+    ///
+    /// 不重试 / 不退避——上层 `monitor::telegram_poller` 拿到 Err 后
+    /// 自己 sleep。
+    pub async fn poll_telegram_updates(
+        &self,
+        token: &str,
+        offset: i64,
+        timeout_secs: u32,
+    ) -> Result<(Vec<Update>, i64), WeclawError> {
+        let url = Self::url(token, "getUpdates");
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[
+                ("offset", offset.to_string()),
+                ("timeout", timeout_secs.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(WeclawError::Network)?;
+        if !resp.status().is_success() {
+            return Err(WeclawError::IlinkApi {
+                code: resp.status().as_u16() as i32,
+                message: "telegram getUpdates failed".to_string(),
+                retriable: resp.status().is_server_error(),
+            });
+        }
+        let body: crate::puppet::telegram_inbound::GetUpdatesResp = resp
+            .json()
+            .await
+            .map_err(WeclawError::Network)?;
+        if !body.ok {
+            return Err(WeclawError::IlinkApi {
+                code: -1,
+                message: "telegram getUpdates returned ok=false".to_string(),
+                retriable: false,
+            });
+        }
+        let new_offset = body
+            .result
+            .iter()
+            .map(|u| u.update_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(offset);
+        Ok((body.result, new_offset))
     }
 
     /// v3.3 F1: 拿 file metadata —— `getFile?file_id=X` → 返回 file_path
@@ -172,28 +232,17 @@ impl MessagingPlatform for TelegramBot {
 
     async fn poll_updates(
         &self,
-        token: &str,
-        _base_url: &str, // Telegram 用固定 api.telegram.org，参数忽略
-        buf: &str,       // offset (last update_id + 1)，跟 iLink 一样存 sync_buf
+        _token: &str,
+        _base_url: &str,
+        _buf: &str,
     ) -> Result<GetUpdatesResp, WeclawError> {
-        let offset: i64 = buf.parse().unwrap_or(0);
-        let url = Self::url(token, "getUpdates");
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[("offset", offset.to_string()), ("timeout", "25".into())])
-            .send()
-            .await
-            .map_err(WeclawError::Network)?;
-        if !resp.status().is_success() {
-            return Err(WeclawError::IlinkApi {
-                code: resp.status().as_u16() as i32,
-                message: format!("telegram getUpdates failed"),
-                retriable: resp.status().is_server_error(),
-            });
-        }
-        // v3.1: 真的把 Telegram Update[] → WeixinMessage 形态 mapping
-        // 现在返回空 resp 占位（caller 会当 long-poll timeout 处理）。
+        // v7.0: trait method shape (iLink-shaped `GetUpdatesResp`) is the
+        // wrong type for Telegram — Telegram's response carries
+        // `Vec<Update>` not iLink's `WeixinMessage[]`. The real poll
+        // path is `Self::poll_telegram_updates` which `monitor::
+        // telegram_poller` calls directly. This trait method stays as
+        // a no-op so the trait stays uniform (poller can hold
+        // `Arc<dyn MessagingPlatform>` for `send_text` etc.).
         Ok(GetUpdatesResp::default())
     }
 
@@ -300,5 +349,68 @@ mod tests {
         let t = TelegramBot::new();
         assert!(t.fetch_qr_code("", "", &[]).await.is_err());
         assert!(t.poll_qr_status("", "").await.is_err());
+    }
+
+    /// v7.0 H1: smoke that the new `poll_telegram_updates` parses
+    /// Telegram's standard getUpdates JSON envelope correctly. We
+    /// don't hit the network — exercise the deserialize + offset
+    /// computation through `GetUpdatesResp` directly. (Wiremock-based
+    /// HTTP test belongs in `tests/integration/` once we add one for
+    /// telegram; until then the integration coverage comes from the
+    /// downstream `telegram_inbound::tests`.)
+    #[test]
+    fn poll_response_envelope_parses_and_offset_advances() {
+        use crate::puppet::telegram_inbound::GetUpdatesResp;
+        // Two updates, max update_id = 1042, so caller should next
+        // poll with offset 1043 to ack both.
+        let raw = serde_json::json!({
+            "ok": true,
+            "result": [
+                {
+                    "update_id": 1041,
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": 555, "type": "private"},
+                        "from": {"id": 555, "is_bot": false, "first_name": "alice"},
+                        "text": "hi"
+                    }
+                },
+                {
+                    "update_id": 1042,
+                    "message": {
+                        "message_id": 2,
+                        "chat": {"id": 555, "type": "private"},
+                        "text": "again"
+                    }
+                }
+            ]
+        });
+        let parsed: GetUpdatesResp = serde_json::from_value(raw).unwrap();
+        assert!(parsed.ok);
+        assert_eq!(parsed.result.len(), 2);
+
+        // Replicate the offset arithmetic poll_telegram_updates does:
+        let max = parsed.result.iter().map(|u| u.update_id).max().unwrap();
+        assert_eq!(max + 1, 1043);
+    }
+
+    #[test]
+    fn poll_response_empty_result_keeps_offset() {
+        use crate::puppet::telegram_inbound::GetUpdatesResp;
+        let raw = serde_json::json!({"ok": true, "result": []});
+        let parsed: GetUpdatesResp = serde_json::from_value(raw).unwrap();
+        assert!(parsed.ok);
+        assert!(parsed.result.is_empty());
+        // poll_telegram_updates falls back to the input offset when
+        // there are no updates — we test that path by simulating the
+        // `.max()` branch:
+        let computed = parsed
+            .result
+            .iter()
+            .map(|u| u.update_id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        assert_eq!(computed, 0);
     }
 }

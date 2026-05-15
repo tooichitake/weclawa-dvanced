@@ -16,10 +16,9 @@ pub mod layout;
 pub mod lifecycle;
 pub mod linker;
 pub mod materialize;
-pub mod quota;
 pub mod reconciler;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -31,9 +30,9 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    pub fn user_dir(&self) -> &Path {
-        &self.user_dir
-    }
+    // v7.0 housekeeping: `user_dir()` accessor removed — callers read the
+    // public `user_dir` field directly. `history_path()` removed — the
+    // current history lives in the `user_history` PG table, not on disk.
     pub fn sandbox_root(&self) -> PathBuf {
         self.user_dir.join("sandbox")
     }
@@ -60,9 +59,6 @@ impl Sandbox {
     }
     pub fn profile_path(&self) -> PathBuf {
         layout::user_profile_path(&self.user_hash)
-    }
-    pub fn history_path(&self) -> PathBuf {
-        layout::user_history_path(&self.user_hash)
     }
 
     /// Ensure all required directories exist for this user and that the
@@ -189,12 +185,10 @@ impl Sandbox {
 ///   the same `u-XXXXXX`, and only brand-new users get SHA-256.
 ///
 /// The decision is made in `hash_user_id_for_lookup` which checks
-/// the DB. Plain `hash_user_id` (no DB access) always returns the
-/// SHA-256 form — use it for new-user creation paths.
-pub fn hash_user_id(user_id: &str) -> String {
-    hash_user_id_v2_sha256(user_id)
-}
-
+/// the DB. New-user creation paths call `hash_user_id_v2_sha256`
+/// directly. (v7.0 housekeeping removed the `hash_user_id` thin
+/// wrapper — call `hash_user_id_v2_sha256` explicitly.)
+///
 /// SHA-256 form. New users post-6.4 get this. Caller asserts there's
 /// no existing SHA-1 row in the DB for this user_id (or doesn't care).
 pub fn hash_user_id_v2_sha256(user_id: &str) -> String {
@@ -293,12 +287,6 @@ pub struct PreflightReport {
     pub operator_credentials_present: bool,
     pub operator_plugins_present: bool,
     pub errors: Vec<String>,
-}
-
-impl PreflightReport {
-    pub fn is_ok(&self) -> bool {
-        self.errors.is_empty()
-    }
 }
 
 /// Startup checks. Materializes `shared/` symlinks; verifies podman+runsc

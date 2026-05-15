@@ -210,6 +210,20 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
         info!("reconciler started (interval = 10 min)");
     }
 
+    // v7.0 H2: ee feature — 启动 audit 归档 scheduler。每 24h 跑一轮，
+    // 把 90 天前的 audit_log 行加密落盘 + 从主表删。
+    #[cfg(feature = "ee")]
+    {
+        let archive_dir = crate::storage::state_dir::state_dir().join("archive");
+        let sched_shutdown = shutdown_rx.clone();
+        let _audit_handle = crate::ee::audit_scheduler::spawn_audit_scheduler(
+            pool.clone(),
+            archive_dir,
+            sched_shutdown,
+        );
+        info!("audit_scheduler started (run every 24h, 90-day retention)");
+    }
+
     let server_handle = tokio::spawn(run_server(bind.to_string(), port));
 
     // Phase 5.4 graceful shutdown drain:

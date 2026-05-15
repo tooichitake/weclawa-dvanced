@@ -43,10 +43,6 @@ pub fn user_profile_path(user_hash: &str) -> PathBuf {
     user_dir(user_hash).join("profile.json")
 }
 
-pub fn user_history_path(user_hash: &str) -> PathBuf {
-    user_dir(user_hash).join("history.json")
-}
-
 pub fn user_sandbox_root(user_hash: &str) -> PathBuf {
     user_dir(user_hash).join("sandbox")
 }

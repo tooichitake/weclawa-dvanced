@@ -76,33 +76,11 @@ impl From<String> for TenantId {
     }
 }
 
-/// Tenant 状态（DB schema `tenants.status` 列对应 enum）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TenantStatus {
-    Active,
-    Suspended,
-    Deleted,
-}
-
-impl TenantStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Suspended => "suspended",
-            Self::Deleted => "deleted",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "active" => Some(Self::Active),
-            "suspended" => Some(Self::Suspended),
-            "deleted" => Some(Self::Deleted),
-            _ => None,
-        }
-    }
-}
+// v7.0 housekeeping: `TenantStatus` enum + `as_str` + `from_str`
+// removed — no production caller. The `tenants.status` column is
+// still a CHECK-constrained TEXT in PG, and `is_active` reads it via
+// a SQL `CASE WHEN status != 'active' THEN 0 ...` comparison without
+// needing a Rust enum.
 
 #[cfg(test)]
 mod tests {
@@ -131,13 +109,6 @@ mod tests {
         assert_eq!(back, t);
     }
 
-    #[test]
-    fn status_strings_match_schema_check() {
-        // SQL 里的 CHECK 约束: status IN ('active','suspended','deleted')
-        for s in ["active", "suspended", "deleted"] {
-            let parsed = TenantStatus::from_str(s).unwrap();
-            assert_eq!(parsed.as_str(), s);
-        }
-        assert!(TenantStatus::from_str("bogus").is_none());
-    }
+    // v7.0 housekeeping: `status_strings_match_schema_check` removed
+    // alongside the `TenantStatus` enum.
 }

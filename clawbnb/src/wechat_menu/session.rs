@@ -141,7 +141,6 @@ pub fn exit(user_hash: &str) {
     })
 }
 
-#[allow(dead_code)]
 pub fn touch_activity(user_hash: &str, mut sess: Session) {
     sess.last_input_at = Some(Utc::now());
     save(user_hash, &sess);

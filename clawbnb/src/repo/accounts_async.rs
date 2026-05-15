@@ -53,18 +53,9 @@ impl SqlxAccountRepo {
         Ok(rows.into_iter().map(materialize_account).collect())
     }
 
-    pub async fn list_for_tenant(&self, tenant_id: &str) -> Result<Vec<Account>, DbError> {
-        let rows: Vec<AccountRow> = sqlx::query_as(
-            "SELECT account_id, token, token_ciphertext, token_nonce,
-                    base_url, weixin_user_id, saved_at, platform_id
-             FROM accounts WHERE tenant_id = $1 ORDER BY saved_at DESC",
-        )
-        .bind(tenant_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx account list_for_tenant: {e}")))?;
-        Ok(rows.into_iter().map(materialize_account).collect())
-    }
+    // v7.0 housekeeping: `list_for_tenant` removed — `list()` covers the
+    // single-operator default path; v3 SaaS multi-tenant lists will need
+    // a per-tenant scoped variant (and matching admin-API exposure).
 
     pub async fn upsert(&self, account: &Account) -> Result<(), DbError> {
         let (ct, nonce) = match account.token.as_ref() {
@@ -114,36 +105,10 @@ impl SqlxAccountRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    pub async fn rotate_token(
-        &self,
-        id: &AccountId,
-        new_token: &BotToken,
-    ) -> Result<bool, DbError> {
-        let (ct, nonce) = match crate::storage::crypto::encrypt(new_token.expose().as_bytes()) {
-            Ok((c, n)) => (Some(c), Some(n.to_vec())),
-            Err(e) => {
-                tracing::warn!("sqlx rotate_token encrypt for {id}: {e}");
-                (None, None)
-            }
-        };
-        let res = sqlx::query(
-            "UPDATE accounts
-             SET token = $1,
-                 token_ciphertext = $2,
-                 token_nonce = $3,
-                 saved_at = $4
-             WHERE account_id = $5",
-        )
-        .bind(new_token.expose())
-        .bind(&ct)
-        .bind(&nonce)
-        .bind(Utc::now())
-        .bind(id.as_str())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DbError::Pool(format!("sqlx rotate: {e}")))?;
-        Ok(res.rows_affected() > 0)
-    }
+    // v7.0 housekeeping: `rotate_token` removed — token rotation always
+    // goes through `upsert(account)` after the QR re-login flow rewrites
+    // the full `Account` struct; a dedicated rotate helper was never
+    // called.
 
     pub async fn get_tenant_id(&self, id: &AccountId) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> =
