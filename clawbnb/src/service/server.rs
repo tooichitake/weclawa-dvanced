@@ -147,6 +147,19 @@ fn protected_routes() -> Router {
                 .put(super::admin::put_tenant_sso_config),
         );
 
+    // v7.8 — GUI-supporting endpoints for SLA dashboard / Trust tier
+    // viewer / Billing summary tabs. SLA needs the `sla_rollup` table
+    // (only created in ee builds via sla_driver migration). Trust +
+    // Billing usage live on core schema, default-feature.
+    #[cfg(feature = "ee")]
+    let r = r.route("/admin/sla", get(super::admin::get_sla_rollups));
+    let r = r
+        .route("/admin/trust", get(super::admin::get_trust_snapshots))
+        .route(
+            "/admin/billing/usage",
+            get(super::admin::get_billing_usage),
+        );
+
     r.layer(middleware::from_fn(bearer_auth))
 }
 

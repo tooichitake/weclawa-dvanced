@@ -15,6 +15,9 @@ const tabs = {
   tenants:     () => loadTenants(),
   billing:     () => loadBilling(),
   sso:         () => loadSso(),
+  // v7.8 — new SLA + Trust dashboards.
+  sla:         () => loadSla(),
+  trust:       () => loadTrust(),
 };
 
 // v5.1 N2: tenants/billing/sso tab loaders. 当前 backend 还没有
@@ -50,6 +53,12 @@ async function loadTenants() {
 
 async function loadBilling() {
   // v5.2 O5: 真后端 — 复用 /tenants 数据，前端按 billing_status 重排展示。
+  // v7.8 — 同时 wire usage refresh 按钮。
+  const usageBtn = document.getElementById('billing-usage-refresh');
+  if (usageBtn && !usageBtn._wired) {
+    usageBtn._wired = true;
+    usageBtn.addEventListener('click', () => fetchBillingUsage());
+  }
   const el = document.getElementById('billing-tenants-list');
   try {
     const r = await api('GET', '/api/v1/tenants');
@@ -73,6 +82,158 @@ async function loadBilling() {
 
 async function loadSso() {
   // SSO tab 静态文档；配置真改通过 tenants 表 SQL。无 API 调用。
+}
+
+// v7.8 — SLA dashboard
+async function loadSla() {
+  // wire refresh button (idempotent — only binds first load)
+  const btn = document.getElementById('sla-refresh');
+  if (btn && !btn._wired) {
+    btn._wired = true;
+    btn.addEventListener('click', () => fetchSla());
+  }
+  // Auto-fetch first time the tab opens.
+  await fetchSla();
+}
+
+async function fetchSla() {
+  const tenant = (document.getElementById('sla-tenant').value || 'default').trim();
+  const win = document.getElementById('sla-window').value || '24h';
+  const summaryEl = document.getElementById('sla-summary');
+  const listEl = document.getElementById('sla-series-list');
+  summaryEl.innerHTML = '<div class="empty">查询中…</div>';
+  listEl.innerHTML = '';
+  try {
+    const r = await api('GET',
+      `/api/v1/admin/sla?tenant=${encodeURIComponent(tenant)}&window=${encodeURIComponent(win)}`);
+    const summary = r.summary || {};
+    const uptimePct = (summary.avg_uptime != null)
+      ? (summary.avg_uptime * 100).toFixed(3)
+      : 'n/a';
+    summaryEl.classList.remove('empty');
+    summaryEl.innerHTML = `
+      <table class="kv">
+        <tr><th>tenant</th><td><code>${esc(r.tenant)}</code></td></tr>
+        <tr><th>window</th><td>${esc(win)} (${(r.window_secs / 3600).toFixed(1)}h)</td></tr>
+        <tr><th>avg uptime</th><td><strong>${uptimePct}%</strong></td></tr>
+        <tr><th>windows count</th><td>${summary.windows_count ?? 0}</td></tr>
+      </table>`;
+    const series = r.series || [];
+    if (series.length === 0) {
+      listEl.innerHTML = '<div class="empty">该窗口内没有数据 — 该 tenant 可能没活跃流量，或 sla_driver 还没跑过。</div>';
+      return;
+    }
+    listEl.innerHTML = `
+      <table class="kv">
+        <tr><th>window_start</th><th>uptime</th><th>downtime_s</th>
+            <th>latency_p99_ms</th><th>error_rate</th></tr>
+        ${series.map(w => `<tr>
+          <td class="small"><code>${esc(w.window_start)}</code></td>
+          <td><span class="badge ${w.uptime >= 0.995 ? 'badge-ok' : (w.uptime >= 0.95 ? 'badge-warn' : 'badge-err')}">${(w.uptime * 100).toFixed(2)}%</span></td>
+          <td class="small">${w.downtime_seconds}</td>
+          <td class="small">${w.latency_p99_ms}</td>
+          <td class="small">${(w.error_rate * 100).toFixed(2)}%</td>
+        </tr>`).join('')}
+      </table>`;
+    listEl.classList.remove('empty');
+  } catch (e) {
+    summaryEl.innerHTML = `<div class="empty">加载失败: ${esc(String(e))}</div>`;
+  }
+}
+
+// v7.8 — Trust tier viewer
+async function loadTrust() {
+  const btn = document.getElementById('trust-refresh');
+  if (btn && !btn._wired) {
+    btn._wired = true;
+    btn.addEventListener('click', () => fetchTrust());
+  }
+  await fetchTrust();
+}
+
+async function fetchTrust() {
+  const tenant = (document.getElementById('trust-tenant').value || 'default').trim();
+  const limit = parseInt(document.getElementById('trust-limit').value || '100', 10);
+  const summaryEl = document.getElementById('trust-summary');
+  const listEl = document.getElementById('trust-users-list');
+  summaryEl.innerHTML = '<div class="empty">查询中…</div>';
+  listEl.innerHTML = '';
+  try {
+    const r = await api('GET',
+      `/api/v1/admin/trust?tenant=${encodeURIComponent(tenant)}&limit=${limit}`);
+    const tc = r.tier_counts || {};
+    // Tier order for stable display
+    const order = ['quarantined', 'restricted', 'standard', 'trusted'];
+    const rows = order
+      .filter(t => tc[t] !== undefined)
+      .map(t => `<tr><td><span class="badge ${tierBadgeClass(t)}">${esc(t)}</span></td><td>${tc[t]}</td></tr>`)
+      .join('');
+    summaryEl.classList.remove('empty');
+    summaryEl.innerHTML = `
+      <table class="kv">
+        <tr><th>tenant</th><td><code>${esc(r.tenant)}</code></td></tr>
+        <tr><th>active users (within trust_driver window)</th><td>${(r.users || []).length}</td></tr>
+      </table>
+      <h4>Tier 分布</h4>
+      <table class="kv">${rows || '<tr><td class="small">no rows</td></tr>'}</table>`;
+    const users = r.users || [];
+    if (users.length === 0) {
+      listEl.innerHTML = '<div class="empty">没有受评分用户 — trust_driver 在 daemon 启动 90s 后才首次跑，活跃用户需 7 天内有 inbound history。</div>';
+      return;
+    }
+    listEl.innerHTML = `
+      <table class="kv">
+        <tr><th>user_hash</th><th>score</th><th>tier</th>
+            <th>success</th><th>uptime</th><th>threat</th><th>integrity</th>
+            <th>updated</th></tr>
+        ${users.map(u => `<tr>
+          <td><code>${esc(u.user_hash)}</code></td>
+          <td><strong>${u.score.toFixed(2)}</strong></td>
+          <td><span class="badge ${tierBadgeClass(u.tier)}">${esc(u.tier)}</span></td>
+          <td class="small">${u.inputs.success_rate.toFixed(2)}</td>
+          <td class="small">${u.inputs.uptime.toFixed(2)}</td>
+          <td class="small">${u.inputs.threat.toFixed(2)}</td>
+          <td class="small">${u.inputs.integrity.toFixed(2)}</td>
+          <td class="small">${esc(u.updated_at)}</td>
+        </tr>`).join('')}
+      </table>`;
+    listEl.classList.remove('empty');
+  } catch (e) {
+    summaryEl.innerHTML = `<div class="empty">加载失败: ${esc(String(e))}</div>`;
+  }
+}
+
+function tierBadgeClass(tier) {
+  switch (tier) {
+    case 'trusted':     return 'badge-ok';
+    case 'standard':    return 'badge-ok';
+    case 'restricted':  return 'badge-warn';
+    case 'quarantined': return 'badge-err';
+    default:            return '';
+  }
+}
+
+// v7.8 — Billing usage card (per-tenant cumulative counter snapshot).
+async function fetchBillingUsage() {
+  const tenant = document.getElementById('billing-tenant-filter').value.trim();
+  const card = document.getElementById('billing-usage-card');
+  card.innerHTML = '<div class="empty">查询中…</div>';
+  try {
+    const qs = tenant ? `?tenant=${encodeURIComponent(tenant)}` : '';
+    const r = await api('GET', `/api/v1/admin/billing/usage${qs}`);
+    card.classList.remove('empty');
+    card.innerHTML = `
+      <table class="kv">
+        <tr><th>tenant</th><td><code>${esc(r.tenant)}</code></td></tr>
+        <tr><th>snapshot_at</th><td class="small">${esc(r.snapshot_at)}</td></tr>
+        <tr><th>inbound 累计</th><td><strong>${r.inbound_messages_total.toLocaleString()}</strong> 条</td></tr>
+        <tr><th>sandbox 累计秒</th><td><strong>${r.sandbox_seconds_total.toLocaleString()}</strong> s</td></tr>
+        <tr><th>AI tokens · input</th><td>${r.ai_tokens_input_total.toLocaleString()}</td></tr>
+        <tr><th>AI tokens · output</th><td>${r.ai_tokens_output_total.toLocaleString()}</td></tr>
+      </table>`;
+  } catch (e) {
+    card.innerHTML = `<div class="empty">查询失败: ${esc(String(e))}</div>`;
+  }
 }
 
 document.querySelectorAll('nav.tabs button').forEach(btn => {
@@ -214,13 +375,17 @@ async function bootstrap() {
     document.getElementById('tab-btn-tenants').hidden = false;
     document.getElementById('tab-btn-billing').hidden = false;
     document.getElementById('tab-btn-sso').hidden = false;
+    // v7.8 — SLA dashboard 也仅 super_admin（数据跨租户，不应混看）
+    document.getElementById('tab-btn-sla').hidden = false;
   }
-  // read_write 及以上看 audit / logs / metrics / sandboxes
+  // read_write 及以上看 audit / logs / metrics / sandboxes / trust
   if (currentAdmin.role === 'super_admin' || currentAdmin.role === 'read_write') {
     document.getElementById('tab-btn-audit').hidden = false;
     document.getElementById('tab-btn-logs').hidden = false;
     document.getElementById('tab-btn-metrics').hidden = false;
     document.getElementById('tab-btn-sandboxes').hidden = false;
+    // v7.8 — Trust 看板 read_write 也能看（不能改，纯查看）
+    document.getElementById('tab-btn-trust').hidden = false;
   }
   // Logout wiring.
   document.getElementById('logout-btn').addEventListener('click', () => {

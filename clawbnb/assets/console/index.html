@@ -41,6 +41,8 @@
   <button data-tab="tenants" id="tab-btn-tenants" hidden>租户</button>
   <button data-tab="billing" id="tab-btn-billing" hidden>计费</button>
   <button data-tab="sso" id="tab-btn-sso" hidden>SSO</button>
+  <button data-tab="sla" id="tab-btn-sla" hidden>SLA</button>
+  <button data-tab="trust" id="tab-btn-trust" hidden>信任分</button>
 </nav>
 
 <main>
@@ -349,7 +351,7 @@
     </div>
   </section>
 
-  <!-- v5.1 N2: 计费（Stripe；仅 super_admin） -->
+  <!-- v5.1 N2 / v7.8 扩展: 计费（Stripe；仅 super_admin） -->
   <section id="tab-billing" class="tab-content" hidden>
     <div class="card">
       <h2>计费 (Stripe)</h2>
@@ -357,17 +359,97 @@
         Stripe webhook 接 <code>POST /api/v1/billing/stripe-webhook</code>（HMAC-SHA256 验签）。事件实时改 <code>tenants.billing_status</code>:
         <code>invoice.paid</code> → active；<code>invoice.payment_failed</code> → pending (grace 7d)；
         <code>customer.subscription.deleted</code> → suspended。
+        v7.7 新增 daemon 内嵌 Usage Records pusher（hourly），通过
+        <code>tenants.stripe_subscription_items_json</code> 配 per-item ID。
       </p>
+
+      <h3>当前用量（"现在算账要收多少"）</h3>
+      <p class="small">
+        从 daemon <code>/metrics</code> 实时聚合的 4 个 billing counter。pusher 任务每小时
+        action=set 推 Stripe（idempotent）。如对不上 Stripe dashboard，看 daemon 日志 <code>stripe_usage_pusher: tenant=X key=Y qty=N</code>。
+      </p>
+      <label class="kv" style="display:inline-flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <span>tenant 过滤：</span>
+        <input id="billing-tenant-filter" type="text" placeholder="default 留空看所有" />
+        <button class="btn secondary" id="billing-usage-refresh">查询</button>
+      </label>
+      <div id="billing-usage-card" class="empty">尚未查询</div>
+
       <h3>Webhook 配置</h3>
       <pre id="billing-config"><code>endpoint: https://&lt;your-daemon&gt;/api/v1/billing/stripe-webhook
 secret env: WECLAWBOT_STRIPE_WEBHOOK_SECRET (whsec_...)
 signing algorithm: HMAC-SHA256 (Stripe-Signature header)
-replay window: 5 min</code></pre>
+replay window: 5 min
+
+# v7.7 自动 Usage Records pusher（可选，opt-in）
+api key env:  WECLAWBOT_STRIPE_API_KEY (sk_...)
+prom URL env: WECLAWBOT_PROMETHEUS_URL (http://...:9090)
+per-tenant config: tenants.stripe_subscription_items_json = {
+  "inbound":         "si_xxxxxxxx",
+  "sandbox_seconds": "si_yyyyyyyy",
+  "ai_tokens_input": "si_zzzzzzzz",
+  "ai_tokens_output":"si_wwwwwwww"
+}</code></pre>
       <h3>Tenants 当前计费状态</h3>
       <div id="billing-tenants-list"><div class="empty">加载中…</div></div>
       <div class="btn-row" style="margin-top:12px;">
         <button class="btn secondary" id="billing-refresh">刷新</button>
       </div>
+    </div>
+  </section>
+
+  <!-- v7.8 — SLA 看板（仅 super_admin；ee feature only） -->
+  <section id="tab-sla" class="tab-content" hidden>
+    <div class="card">
+      <h2>SLA 看板</h2>
+      <p class="small">
+        从 <code>sla_rollup</code> 表读最近 N 小时的 5min 窗口聚合数据。
+        <code>sla_driver</code> 每 5 分钟跑一次，<code>error_rate</code> 走 DB（user_history 算），
+        <code>downtime_seconds</code> 和 <code>latency_p99_ms</code> 走 Prometheus query
+        （需 <code>WECLAWBOT_PROMETHEUS_URL</code> env，否则为 0）。
+      </p>
+      <label class="kv" style="display:inline-flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <span>tenant：</span>
+        <input id="sla-tenant" type="text" placeholder="default" value="default" />
+        <span style="margin-left:12px;">窗口：</span>
+        <select id="sla-window">
+          <option value="1h">1h</option>
+          <option value="24h" selected>24h</option>
+          <option value="7d">7d</option>
+          <option value="30d">30d</option>
+        </select>
+        <button class="btn secondary" id="sla-refresh">查询</button>
+      </label>
+      <div id="sla-summary" class="empty">尚未查询</div>
+      <h3>窗口明细（最新在前）</h3>
+      <div id="sla-series-list" class="empty">尚未查询</div>
+    </div>
+  </section>
+
+  <!-- v7.8 — 信任分等级查看（read_write+） -->
+  <section id="tab-trust" class="tab-content" hidden>
+    <div class="card">
+      <h2>信任分 (Trust Tier)</h2>
+      <p class="small">
+        <code>trust_driver</code> 每 15 分钟为每个 7 天内活跃用户算一份信任分。
+        分数低自动收紧工具白名单（ACP session 在下次 invoke 时 invalidate 重生效）。
+        <br>
+        - <strong>success_rate</strong> = 最近 100 turns 里 <code>assistant / user</code> 比例。<br>
+        - <strong>uptime</strong> = 7 天内活跃天数 / 7。<br>
+        - <strong>threat</strong> = <code>ai_prompt.blocked</code> 命中数 / user_count。<br>
+        - <strong>integrity</strong> = 1 - rate_limit.breach 比例（叠加 cost-burst 惩罚）。<br>
+        - <strong>score</strong> = 0.4·success + 0.2·uptime + 0.2·(1-threat) + 0.2·integrity。
+      </p>
+      <label class="kv" style="display:inline-flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <span>tenant：</span>
+        <input id="trust-tenant" type="text" placeholder="default" value="default" />
+        <span style="margin-left:12px;">limit：</span>
+        <input id="trust-limit" type="number" value="100" min="1" max="1000" />
+        <button class="btn secondary" id="trust-refresh">查询</button>
+      </label>
+      <div id="trust-summary" class="empty">尚未查询</div>
+      <h3>用户列表（按 score 升序，最受限制的在前）</h3>
+      <div id="trust-users-list" class="empty">尚未查询</div>
     </div>
   </section>
 
