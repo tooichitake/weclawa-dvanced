@@ -4,7 +4,7 @@
 //! from DB-derivable counters (history rows + audit rows), upserts
 //! into `sla_rollup`. Sibling to `audit_scheduler` + `trust_driver`.
 //!
-//! ## Phase 1 (this commit): DB-derivable metrics only
+//! ## Phase 1 (always on): DB-derivable metrics
 //!
 //! - `error_rate` ∈ [0,1] — `user_history.role='user'` count vs
 //!   `role='assistant'` count over the window. `error_rate = 1 -
@@ -13,19 +13,22 @@
 //!   errors).
 //! - `covered_seconds` — fixed 300 (5min window).
 //!
-//! ## Phase 2 (v7.6 / follow-up): Prometheus-derived metrics
+//! ## Phase 2 (v7.6 — opt-in via env): Prometheus-derived metrics
 //!
-//! `downtime_seconds` + `latency_p99_ms` require:
-//!   1. Per-tenant labels on `weclawbot_api_requests_total{...}` +
-//!      `weclawbot_api_request_duration_seconds{...}` (currently no
-//!      tenant label — would explode cardinality if we add it blindly,
-//!      so it'd be a feature-gated tenant-aware path).
-//!   2. A Prometheus HTTP client + scheduled queries `rate(...)` and
-//!      `histogram_quantile(0.99, ...)` per-tenant.
+//! When `WECLAWBOT_PROMETHEUS_URL` is set, the driver queries
+//! Prometheus for:
 //!
-//! Until then, both columns are written as 0 (their DEFAULT in
-//! V0014). GUI cards should display "n/a" rather than imply 100%
-//! uptime when downtime data isn't being collected.
+//! - `downtime_seconds` — derived from the `tenant_id`-labeled
+//!   `weclawbot_inbound_messages_total` counter (added in v7.6 to
+//!   `monitor/poller`). Formula:
+//!   `sum(rate(...{status!="received"}[5m])) / sum(rate(...[5m]))`
+//!   → multiply by window_seconds → clamp.
+//!
+//! Phase 3 (TODO, future work): per-tenant `latency_p99_ms` requires
+//! adding a `tenant_id` label to the
+//! `weclawbot_api_request_duration_seconds` histogram. That's a
+//! schema change to the metrics-exporter-prometheus output, so it's
+//! deferred until we re-audit cardinality across all callers.
 //!
 //! ## Scheduling
 //!
@@ -188,6 +191,33 @@ async fn compute_and_upsert(
         0.0
     };
 
+    // v7.6 phase-2 — query Prometheus for uptime + latency_p99 if
+    // `WECLAWBOT_PROMETHEUS_URL` is set. The counter
+    // `weclawbot_inbound_messages_total{tenant_id,status}` got the
+    // tenant_id label in v7.6 (see monitor/poller.rs), so we can
+    // partition. Latency_p99 still requires histogram + tenant label
+    // on `weclawbot_api_request_duration_seconds` which is phase-3
+    // (modifying the histogram is a metrics-exporter-prometheus
+    // schema change). For phase-2 we leave latency at 0 and only
+    // populate `downtime_seconds` derived from inbound failure rate.
+    let (downtime_seconds, latency_p99_ms) =
+        if let Some(prom) = crate::observability::prom_query::try_global_client() {
+            // Uptime fraction = 1 - (fraction of inbound that errored
+            // during the window). PromQL composition:
+            //   error_rate = sum(rate(...{status="error"})) / sum(rate(...))
+            // We compute as a 5-min rate matching our window.
+            let q = format!(
+                r#"sum(rate(weclawbot_inbound_messages_total{{tenant_id="{tenant_id}",status!="received"}}[5m]))
+                   / sum(rate(weclawbot_inbound_messages_total{{tenant_id="{tenant_id}"}}[5m]))"#,
+            );
+            let error_frac = prom.instant_scalar(&q).await.unwrap_or(0.0);
+            let downtime = (error_frac * WINDOW_SECONDS as f64).clamp(0.0, WINDOW_SECONDS as f64);
+            // Latency_p99 phase-3 (TODO: histogram tenant label).
+            (downtime as i32, 0i32)
+        } else {
+            (0i32, 0i32)
+        };
+
     // Upsert. window_start is part of the composite PK. Re-running the
     // same pass overwrites with fresh numbers if there's any drift
     // (idempotent: ON CONFLICT DO UPDATE).
@@ -195,14 +225,18 @@ async fn compute_and_upsert(
         "INSERT INTO sla_rollup
              (tenant_id, window_start, covered_seconds,
               downtime_seconds, latency_p99_ms, error_rate)
-         VALUES ($1, $2, $3, 0, 0, $4)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (tenant_id, window_start) DO UPDATE SET
-             covered_seconds = excluded.covered_seconds,
-             error_rate      = excluded.error_rate",
+             covered_seconds   = excluded.covered_seconds,
+             downtime_seconds  = excluded.downtime_seconds,
+             latency_p99_ms    = excluded.latency_p99_ms,
+             error_rate        = excluded.error_rate",
     )
     .bind(tenant_id)
     .bind(window_start)
     .bind(WINDOW_SECONDS as i32)
+    .bind(downtime_seconds)
+    .bind(latency_p99_ms)
     .bind(error_rate)
     .execute(pool)
     .await?;

@@ -63,6 +63,33 @@ pub fn process_event(event: &Value, output: &mut ClaudeOutput, sandbox: &Sandbox
                     output.text = t.to_string();
                 }
             }
+            // v7.6 — extract token usage. claude-cli emits a `usage`
+            // object on the result event. Shape (current as of
+            // Anthropic SDK v0.5x):
+            //   { input_tokens, cache_creation_input_tokens,
+            //     cache_read_input_tokens, output_tokens }
+            // For billing we sum all input variants since cache reads
+            // still bill at a fractional rate. Codex follows the same
+            // convention via its own stream-json shim.
+            if let Some(usage) = event.get("usage").and_then(|v| v.as_object()) {
+                let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                    + usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                    + usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                let output_n = usage
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                output.token_usage = Some(crate::ai::TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output_n,
+                });
+            }
         }
         _ => debug!("ignored stream-json event type={ty}"),
     }

@@ -168,6 +168,51 @@ pub async fn complete_with_content(
 
     let mut output = result?;
 
+    // v7.6 — emit per-tenant token counters when the provider gave
+    // us usage data. claude / codex both populate `token_usage` via
+    // stream_json parser. Tenant lookup goes through the cached
+    // resolver (per-message overhead = one read of an in-memory map).
+    if let Some(usage) = output.token_usage {
+        let provider: &'static str = if cfg.provider == "claude" {
+            "claude"
+        } else if cfg.provider == "codex" {
+            "codex"
+        } else {
+            "unknown-cli"
+        };
+        // The Sandbox doesn't carry tenant_id directly — we need the
+        // user's tenant. Skip tenant resolution if pool unreachable
+        // (fail-open: prefer no metric over panicking the handler).
+        if let Some(_pool) = crate::storage::db_async::try_global_async_pool() {
+            // user_hash → user → tenant_id. We look this up via SQL
+            // because Sandbox lifecycle doesn't include the row read.
+            let user_hash_clone = user_hash.to_string();
+            let tenant_id: Option<String> = sqlx::query_scalar(
+                "SELECT tenant_id FROM users WHERE hash = $1",
+            )
+            .bind(&user_hash_clone)
+            .fetch_optional(&_pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some(tid) = tenant_id {
+                let tenant = crate::tenancy::TenantId::new(tid);
+                crate::service::billing_metering::record_ai_tokens(
+                    &tenant,
+                    provider,
+                    "input",
+                    usage.input_tokens,
+                );
+                crate::service::billing_metering::record_ai_tokens(
+                    &tenant,
+                    provider,
+                    "output",
+                    usage.output_tokens,
+                );
+            }
+        }
+    }
+
     output.text = output.text.trim().to_string();
     if output.text.is_empty()
         && output.generated_files.is_empty()

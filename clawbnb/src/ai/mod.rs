@@ -62,6 +62,24 @@ pub struct ClaudeOutput {
     /// 里。我们存到这个字段而不是 `text` 防止被当回复发给用户。invoke
     /// 在主流程末尾看到 error_message.is_some() 时返回 Err 走 fallback。
     pub error_message: Option<String>,
+    /// v7.6 — token usage extracted from the provider response.
+    /// Populated by stream-json parser (claude / codex) or by
+    /// chat::complete (OpenAI-compatible). Used for per-tenant
+    /// billing + cost-burst trust scoring.
+    ///
+    /// `None` means the provider didn't expose token counts in the
+    /// response shape we parsed. This is the case for older
+    /// claude-cli versions and providers that don't return `usage`.
+    pub token_usage: Option<TokenUsage>,
+}
+
+/// Token-count summary for one AI invocation. Mirrors the shape that
+/// both Anthropic + OpenAI emit in their `usage` field; codex follows
+/// claude's stream-json convention.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 // ---------------- Provider config (claude / codex shared shape) -------

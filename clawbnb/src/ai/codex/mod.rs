@@ -128,6 +128,11 @@ pub async fn invoke(
         generated_files: Vec::new(),
         generated_urls: Vec::new(),
         error_message: None,
+        // codex's stream-json format doesn't include a final `usage`
+        // event the same way claude does; once the codex shim emits
+        // one, the stream_json parser shared with claude will populate
+        // this — until then, no per-codex-call token billing.
+        token_usage: None,
     };
     // codex doesn't emit MCP tool calls; deliverable files (if any) go
     // through the filesystem-diff fallback in `monitor::forward`. Nothing

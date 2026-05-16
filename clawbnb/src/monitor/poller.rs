@@ -95,13 +95,23 @@ pub async fn run_account_monitor(
                 }
 
                 if let Some(msgs) = resp.msgs {
+                    // v7.6 — resolve tenant once per batch (not per
+                    // message) since all messages in a `getUpdates`
+                    // response belong to the same account/tenant.
+                    let tenant =
+                        crate::tenancy::resolver::resolve_tenant_for_account(&account_id);
                     for msg in msgs {
-                        // Phase 4: inbound metric. account_id label is
-                        // bounded by the number of bot accounts (single
-                        // digits), safe to use as a label.
+                        // Phase 4 + v7.6: inbound metric. account_id +
+                        // tenant_id labels are bounded by # of bot
+                        // accounts × # of paying tenants (single
+                        // digits × low hundreds), safe cardinality.
+                        // tenant_id is what the SLA aggregator needs
+                        // to compute per-tenant uptime via PromQL.
                         metrics::counter!(
                             "weclawbot_inbound_messages_total",
                             "account_id" => account_id.clone(),
+                            "tenant_id" => tenant.as_str().to_string(),
+                            "platform" => "ilink-wechat",
                             "status" => "received"
                         )
                         .increment(1);

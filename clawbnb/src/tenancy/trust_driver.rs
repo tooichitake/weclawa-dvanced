@@ -38,6 +38,12 @@
 //!   writes one row each time a user exceeds the per-minute cap.
 //!   Driver computes `1.0 - (breaches / max(total_attempts, 1))`.
 //!
+//!   **v7.6 cost-burst overlay**: if the user's request rate in the
+//!   last hour is > 3× their 7-day average, integrity is multiplied
+//!   by `3 / ratio` (floored at 0.3). Catches "user suddenly
+//!   bursting" patterns — usually compromise / automation that
+//!   shouldn't be trusted with the user's normal tier.
+//!
 //! ### Total inbound denominator
 //!
 //! Both threat and integrity divide by the user's "total inbound
@@ -276,11 +282,45 @@ async fn compute_inputs(
     .await?;
     // Denominator = breaches + accepted (= user_count); 0/0 → 1.0 (perfect).
     let total_attempts = (breach_count + user_count) as f64;
-    let integrity = if total_attempts > 0.0 {
+    let mut integrity = if total_attempts > 0.0 {
         (1.0 - (breach_count as f64 / total_attempts)).clamp(0.0, 1.0)
     } else {
         1.0
     };
+
+    // v7.6 — cost-burst factor adjusts `integrity`. A user whose
+    // request rate in the last hour is much higher than their 7-day
+    // average is likely either (a) running a script against us or
+    // (b) compromised. We treat this as an integrity hit, capped so
+    // a single legitimate burst doesn't fully demote a user.
+    //
+    // Formula: `recent_per_hour = COUNT(user turns in last 1h)`,
+    // `avg_per_hour = user_count / (7 * 24)`. If recent_per_hour
+    // exceeds 3× avg, scale integrity by `1 / (recent/avg/3)`
+    // clamped to [0.3, 1.0]. So a 6× burst → integrity *= 0.5,
+    // 9× burst → 0.33, 30× burst → 0.3 floor.
+    //
+    // We do this in a separate query to keep the SQL readable; one
+    // extra row-count per user per pass is negligible.
+    let (recent_hour_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT FROM user_history
+         WHERE user_hash = $1
+           AND role = 'user'
+           AND created_at >= now() - INTERVAL '1 hour'",
+    )
+    .bind(user_hash)
+    .fetch_one(pool)
+    .await?;
+    if user_count > 0 && recent_hour_count > 0 {
+        let avg_per_hour = (user_count as f64) / (ACTIVE_WINDOW_DAYS as f64 * 24.0);
+        if avg_per_hour > 0.0 {
+            let ratio = (recent_hour_count as f64) / avg_per_hour;
+            if ratio > 3.0 {
+                let penalty = (3.0 / ratio).clamp(0.3, 1.0);
+                integrity = (integrity * penalty).clamp(0.0, 1.0);
+            }
+        }
+    }
 
     Ok(TrustInputs {
         success_rate,
@@ -361,5 +401,56 @@ mod tests {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
         let inputs = compute_inputs(&pool, "u-spammer", cutoff).await.unwrap();
         assert_eq!(inputs.integrity, 0.0);
+    }
+
+    /// v7.6 — cost-burst overlay. A user with 100 turns spread over
+    /// 7 days has avg_per_hour = 100/(7*24) ≈ 0.6. If they suddenly
+    /// send 30 turns in the last hour, ratio = 50× → penalty = 0.3
+    /// (floor) → integrity scales by 0.3. We can't easily test the
+    /// "last 1 hour" SQL clause from a unit test because we'd need
+    /// to mock NOW(), so this test sets up a synthetic dataset with
+    /// recent timestamps to exercise the path.
+    #[tokio::test]
+    async fn cost_burst_penalty_applies_on_recent_spike() {
+        let pool = db_async::open_in_memory().await.unwrap();
+        // Seed users row so the FK is happy.
+        sqlx::query(
+            "INSERT INTO users (hash, user_id_hint, tenant_id, created_at)
+             VALUES ('u-bursty', 'wxid', 'default', now() - INTERVAL '6 days')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 100 turns spread evenly across the last 6 days; THEN 30
+        // turns in the last 30 minutes (well inside the 1-hour window).
+        for i in 0..100 {
+            sqlx::query(
+                "INSERT INTO user_history (user_hash, role, content, created_at)
+                 VALUES ('u-bursty', 'user', 'x', now() - (INTERVAL '6 days' * $1::float8 / 100.0))",
+            )
+            .bind(i as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for _ in 0..30 {
+            sqlx::query(
+                "INSERT INTO user_history (user_hash, role, content, created_at)
+                 VALUES ('u-bursty', 'user', 'spike', now() - INTERVAL '5 minutes')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+        let inputs = compute_inputs(&pool, "u-bursty", cutoff).await.unwrap();
+        // Total user turns ≈ 130, ratio ≈ 30 / (130/(7*24)) ≈ 30/0.77 ≈ 38×.
+        // 38× > 3× → penalty = 3/38 ≈ 0.08 → clamped to 0.3.
+        // integrity starts at 1.0 (no breaches), so final = 0.3.
+        assert!(
+            (inputs.integrity - 0.3).abs() < 0.01,
+            "expected integrity ≈ 0.3 from cost-burst, got {}",
+            inputs.integrity
+        );
     }
 }

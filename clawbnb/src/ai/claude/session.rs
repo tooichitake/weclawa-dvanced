@@ -71,6 +71,16 @@ pub struct ClaudeAcpSession {
     /// session_id from claude's first `system/init` frame — used for
     /// audit log correlation
     session_id: Option<String>,
+    /// v7.6 — hash of the ToolPolicy at spawn time. Used to detect
+    /// "the operator changed the user's allowed/disallowed tools
+    /// while this session was running; respawn so the new policy
+    /// takes effect". Each `invoke_acp` call recomputes this and
+    /// compares; mismatch → kill + respawn.
+    ///
+    /// We store a SHA-256 instead of the full policy so it's small +
+    /// cheap to compare. Hash inputs: serialized allowed + disallowed
+    /// lists + tier.
+    policy_version: u64,
 }
 
 impl Drop for ClaudeAcpSession {
@@ -86,6 +96,30 @@ type SessionTable = Mutex<HashMap<String, Arc<Mutex<ClaudeAcpSession>>>>;
 fn sessions() -> &'static SessionTable {
     static T: OnceLock<SessionTable> = OnceLock::new();
     T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// v7.6 — compute a fingerprint of the current effective ToolPolicy
+/// for `user_hash`. Used by the ACP session table to detect when an
+/// operator changes the user's settings (or when their trust tier
+/// flips) so we can respawn the session with the new flags. Cheap
+/// hashing via `std::hash::DefaultHasher` is enough — we only care
+/// about equality, not preimage resistance.
+async fn policy_fingerprint(user_hash: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let user_settings = crate::ai::history::user_settings_json(user_hash)
+        .await
+        .unwrap_or_else(|| serde_json::json!({}));
+    let policy = crate::ai::tool_policy::ToolPolicy::for_user(user_hash, &user_settings).await;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for tool in &policy.allowed {
+        tool.hash(&mut hasher);
+        b"\x01allow\x00".hash(&mut hasher);
+    }
+    for tool in &policy.disallowed {
+        tool.hash(&mut hasher);
+        b"\x01deny\x00".hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 impl ClaudeAcpSession {
@@ -150,11 +184,19 @@ impl ClaudeAcpSession {
             });
         }
 
+        // v7.6 — fingerprint the policy now so we have the version
+        // for invalidation comparisons later. Reuses the same
+        // settings + policy resolution we just did for arg building
+        // (so this is one extra DB read per session spawn, not per
+        // message — cheap).
+        let policy_version = policy_fingerprint(sandbox.user_hash.as_str()).await;
+
         let mut sess = ClaudeAcpSession {
             child,
             stdin,
             stdout_lines,
             session_id: None,
+            policy_version,
         };
 
         // Read system/init frame to capture session_id + verify the
@@ -313,19 +355,45 @@ pub async fn invoke_acp(
 ) -> Result<ClaudeOutput, String> {
     let key = sandbox.user_hash.as_str().to_string();
 
+    // v7.6 — fingerprint the user's current policy before we look up
+    // the session. If the policy has changed since the session was
+    // spawned, treat the cached session as stale and respawn (same
+    // path as a dead process). This is the "policy invalidate"
+    // signal — operator PUT /api/v1/users/{hash}/settings, next
+    // inbound picks up the new flags.
+    let current_policy = policy_fingerprint(&key).await;
+
     // Get-or-create session arc. Hold table lock only briefly.
     let sess_arc = {
         let mut table = sessions().lock().await;
         if let Some(existing) = table.get(&key).cloned() {
-            // Verify liveness — cheap try_wait under per-session lock.
-            let alive = {
+            // Verify liveness AND policy freshness — cheap checks
+            // under the per-session lock.
+            let (alive, policy_matches) = {
                 let mut s = existing.lock().await;
-                s.is_alive()
+                (s.is_alive(), s.policy_version == current_policy)
             };
-            if alive {
+            if alive && policy_matches {
                 existing
             } else {
-                info!("[{}] claude-acp dead — respawning", sandbox.user_hash);
+                if !policy_matches {
+                    info!(
+                        "[{}] claude-acp policy changed — respawning with new ToolPolicy",
+                        sandbox.user_hash
+                    );
+                    metrics::counter!(
+                        "weclawbot_acp_respawn_total",
+                        "reason" => "policy_change"
+                    )
+                    .increment(1);
+                } else {
+                    info!("[{}] claude-acp dead — respawning", sandbox.user_hash);
+                    metrics::counter!(
+                        "weclawbot_acp_respawn_total",
+                        "reason" => "dead_session"
+                    )
+                    .increment(1);
+                }
                 table.remove(&key);
                 let fresh = ClaudeAcpSession::spawn(sandbox, cfg).await?;
                 let arc = Arc::new(Mutex::new(fresh));

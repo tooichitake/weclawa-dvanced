@@ -17,3 +17,8 @@
 pub mod healthz;
 pub mod metrics;
 pub mod otel;
+// v7.6 — outbound Prometheus HTTP query client. Used by SLA driver
+// (ee feature) to compute uptime + latency_p99 from the time-series
+// store. Optional (env-gated); if WECLAWBOT_PROMETHEUS_URL is unset,
+// the SLA path falls back to phase-1 defaults (0 / n/a).
+pub mod prom_query;

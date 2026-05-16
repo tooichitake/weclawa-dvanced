@@ -70,6 +70,20 @@ struct ChatMessage {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    /// v7.6 — OpenAI-compatible APIs return token counts here. We
+    /// parse it into `crate::ai::TokenUsage` for billing/trust use.
+    /// `None` when the provider omits it (some Ollama / LM Studio
+    /// builds).
+    #[serde(default)]
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChatUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
 }
 
 pub async fn complete(
@@ -169,6 +183,39 @@ pub async fn complete(
 
     let parsed: ChatResponse =
         serde_json::from_str(&body).map_err(|e| format!("parse AI response: {e}; body={body}"))?;
+
+    // v7.6 — emit per-tenant token counters when the API returned a
+    // `usage` field. Most OpenAI-compatible providers (OpenAI,
+    // DeepSeek, Kimi, Anthropic OpenAI-shim) do; some local ones
+    // (Ollama, LM Studio < 0.3) skip it — we just no-op then.
+    if let Some(usage) = parsed.usage.as_ref() {
+        if let Some(pool) = crate::storage::db_async::try_global_async_pool() {
+            let user_hash_clone = user_hash.to_string();
+            let tenant_id: Option<String> = sqlx::query_scalar(
+                "SELECT tenant_id FROM users WHERE hash = $1",
+            )
+            .bind(&user_hash_clone)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some(tid) = tenant_id {
+                let tenant = crate::tenancy::TenantId::new(tid);
+                crate::service::billing_metering::record_ai_tokens(
+                    &tenant,
+                    "openai-compat",
+                    "input",
+                    usage.prompt_tokens,
+                );
+                crate::service::billing_metering::record_ai_tokens(
+                    &tenant,
+                    "openai-compat",
+                    "output",
+                    usage.completion_tokens,
+                );
+            }
+        }
+    }
 
     let reply = parsed
         .choices

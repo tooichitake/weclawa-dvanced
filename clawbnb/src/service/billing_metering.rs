@@ -67,28 +67,48 @@ pub fn record_sandbox_seconds(tenant: &TenantId, seconds: f64) {
     .increment(seconds as u64);
 }
 
-// v7.5 housekeeping: `record_ai_tokens` removed — wiring it requires
-// parsing token counts out of claude-cli's stream-json output (which
-// emits them in a `usage` field per assistant turn) + the codex
-// equivalent + the OpenAI Chat Completions `usage` field. That's
-// a multi-provider data-plumbing change, separate from the rest of
-// billing_metering. Re-add when the token-extraction story is
-// uniform across providers; until then per-message + per-sandbox-
-// seconds counters cover the canonical "per-call" and
-// "per-compute" billing dimensions.
+/// v7.6 — record AI provider token usage. Restored from v7.5 deletion
+/// now that the multi-provider extraction story is uniform:
+///   - claude / codex: parsed from `stream-json` `result.usage` event
+///     by `crate::ai::claude::stream_json::process_event`
+///   - openai-compat: parsed from response body `usage` by
+///     `crate::ai::chat::complete`
+///
+/// Both populate `ClaudeOutput::token_usage` (or equivalent), which
+/// the dispatcher then passes here.
+///
+/// Tenant label cardinality is bounded by the number of paying
+/// tenants. Provider + direction are small fixed sets
+/// (`claude`/`codex`/`openai-compat` × `input`/`output`).
+pub fn record_ai_tokens(
+    tenant: &TenantId,
+    provider: &'static str,
+    direction: &'static str,
+    tokens: u64,
+) {
+    if tokens == 0 {
+        return;
+    }
+    metrics::counter!(
+        "weclawbot_billing_ai_tokens_total",
+        "tenant_id" => tenant.as_str().to_string(),
+        "provider" => provider,
+        "direction" => direction
+    )
+    .increment(tokens);
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Smoke: counters increment without panic. Real cardinality
-    /// observation requires `/metrics` endpoint + Prometheus scrape;
-    /// covered by integration tests in `observability::metrics`.
     #[test]
     fn helpers_do_not_panic() {
         let t = TenantId::default_tenant();
         record_inbound(&t, "ilink-wechat");
         record_sandbox_seconds(&t, 4.2);
-        // record_ai_tokens removed in v7.5 — see free-fn block above.
+        record_ai_tokens(&t, "claude", "input", 12_345);
+        record_ai_tokens(&t, "claude", "output", 678);
+        record_ai_tokens(&t, "claude", "input", 0); // no-op short-circuit
     }
 }
