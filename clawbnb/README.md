@@ -23,18 +23,52 @@ Claude subscription for the model itself.
 
 ## Install
 
+One-button (v7.9+):
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<repo>/main/clawbnb/build/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tooichitake/weclawa-dvanced/main/clawbnb/build/install.sh | bash
 ```
 
-Installer:
+Fully self-contained — no manual pre-reqs. The installer:
 
-1. Drops the `weclawbot` binary to `~/.local/bin/`
-2. Installs `podman` (apt / dnf / pacman, by distro)
-3. Downloads `runsc` from gVisor releases, verifies sha512, registers it as
-   a podman runtime
-4. Pulls the sandbox base image (`ghcr.io/<repo>/weclawbot-sandbox-base:latest`)
-5. Installs and starts a `systemd --user` service
+1. Drops the `weclawbot` binary to `~/.local/bin/` (SHA-256 verified)
+2. Installs `podman` (apt / dnf / pacman / zypper by distro)
+3. Starts **Postgres 16** as a podman container (`weclawbot-pg`) on
+   `127.0.0.1:5432`, persisted in volume `weclawbot-pgdata`, supervised
+   by a systemd --user unit so it survives reboots
+4. Generates a 32-byte AES master key for token-at-rest encryption,
+   writes it (mode 0600) to `~/.config/environment.d/weclawbot.conf`
+5. Downloads `runsc` from gVisor releases, verifies sha512, registers
+   it as a podman runtime
+6. Pulls the sandbox base image
+   (`ghcr.io/tooichitake/weclawa-dvanced/weclawbot-sandbox-base:latest`)
+7. Installs and starts `weclawbot.service` (systemd --user) + enables
+   user linger so the daemon survives logout
+
+Idempotent — re-running upgrades each piece in place.
+
+### Optional env knobs
+
+```bash
+# Use an existing Postgres instead of the bundled podman container:
+WECLAWBOT_PG_URL='postgres://user:pw@host:5432/db' bash install.sh
+
+# Pin to a specific release tag:
+WECLAWBOT_VERSION=weclawbot-v0.1.0 bash install.sh
+
+# Skip the binary step (you'll cargo-build it yourself first):
+WECLAWBOT_SKIP_BINARY=1 bash install.sh
+
+# Air-gapped (skip the sandbox-image pull):
+SKIP_IMAGE_PULL=1 bash install.sh
+```
+
+### Uninstall
+
+```bash
+bash uninstall.sh           # preserves data
+bash uninstall.sh --purge   # also wipes ~/.weclawbot + PG container + volume
+```
 
 ## Daily use
 
