@@ -184,6 +184,10 @@ const MIGRATION_FILES: &[(&str, &str)] = &[
         "V0014__sla_rollup.sql",
         include_str!("migrations/V0014__sla_rollup.sql"),
     ),
+    (
+        "V0015__stripe_subscription_item.sql",
+        include_str!("migrations/V0015__stripe_subscription_item.sql"),
+    ),
 ];
 
 // --- Process-global async pool handle --------------------------------------

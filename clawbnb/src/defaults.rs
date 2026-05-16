@@ -6,7 +6,6 @@
 //! 在 multi-thread tokio runtime 内，安全；偶发非 tokio 调用（如 CLI
 //! 子命令独立 invoke）会起一次性 current_thread runtime 兜底。
 
-use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
@@ -15,7 +14,6 @@ use crate::repo::defaults_async::SqlxDefaultsRepo;
 use crate::repo::users::UserProfile;
 use crate::repo::users_async::SqlxUserRepo;
 use crate::runtime::blocking::block_on_async;
-use crate::sandbox::layout;
 use crate::storage::db_async;
 
 pub const DEFAULT_MODEL: &str = "sonnet";

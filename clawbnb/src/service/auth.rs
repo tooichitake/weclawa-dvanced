@@ -60,10 +60,69 @@ pub async fn bearer_auth(mut req: Request<Body>, next: Next) -> Result<Response,
     // request extension 拿到当前 tenant，不再各自硬编码 DEFAULT_TENANT。
     // v2.2 数据下所有 key 仍归 'default'；v3 hosted 多租户上线时 bootstrap
     // 路径会让操作员 mint per-tenant key，此处自然分流。
+    let tenant_id_str = ctx.tenant_id.clone();
     let tenant_id = crate::tenancy::TenantId::new(&ctx.tenant_id);
     req.extensions_mut().insert(ctx);
     req.extensions_mut().insert(tenant_id);
-    Ok(next.run(req).await)
+
+    // v7.7 — per-tenant API histogram for SLA phase 3 (latency_p99).
+    // We can't add tenant_id to the global `metrics_middleware`
+    // histogram (it runs OUTSIDE auth, so AdminContext isn't yet
+    // populated). Instead emit a parallel per-tenant histogram here
+    // — only for authed paths under /api/v1/*, which is what SLA
+    // dashboards care about.
+    //
+    // Cardinality math: ~25 path templates (after collapse_path) ×
+    // ~4 methods × tenants (low hundreds for SaaS) = ~10K series.
+    // Each histogram has ~12 buckets + sum + count → ~140K cells.
+    // metrics-exporter-prometheus's default backend handles 1M+
+    // cells with no measurable overhead.
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let latency_s = started.elapsed().as_secs_f64();
+    let status = resp.status().as_u16();
+    let path_template = collapse_path_for_label(&path);
+    metrics::histogram!(
+        "weclawbot_api_request_duration_per_tenant_seconds",
+        "tenant_id" => tenant_id_str.clone(),
+        "method" => method.clone(),
+        "path" => path_template.clone()
+    )
+    .record(latency_s);
+    metrics::counter!(
+        "weclawbot_api_requests_per_tenant_total",
+        "tenant_id" => tenant_id_str,
+        "method" => method,
+        "path" => path_template,
+        "status" => status.to_string()
+    )
+    .increment(1);
+    Ok(resp)
+}
+
+/// Mirror of `service::server::collapse_path` — we duplicate the
+/// helper here instead of cross-module sharing because it's a tiny
+/// closed function and the alternative (a pub helper in `server.rs`)
+/// would force re-exporting an unrelated internal. If both helpers
+/// drift, the path label between the global and per-tenant
+/// histograms diverges — keep them in lockstep when adding new
+/// dynamic segments (user_hash, key id, qr token, etc.).
+fn collapse_path_for_label(p: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for s in p.split('/') {
+        if s.starts_with("u-") && s.len() >= 8 {
+            out.push("{hash}".into());
+        } else if s.len() == 36 && s.matches('-').count() == 4 {
+            out.push("{uuid}".into());
+        } else if s.len() >= 24 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            out.push("{hex}".into());
+        } else {
+            out.push(s.to_string());
+        }
+    }
+    out.join("/")
 }
 
 // v7.0 housekeeping: `require_role` factory + `forbidden` helper removed.

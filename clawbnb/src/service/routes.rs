@@ -461,6 +461,47 @@ pub async fn delete_user_history(
     Ok(Json(json!({"ok": true, "hash": hash, "cleared": true})))
 }
 
+/// v7.7 — `POST /api/v1/users/{hash}/sessions/kill` — operator action
+/// to immediately kill the user's long-running ACP claude session.
+///
+/// Use case: operator changed the user's tool allowlist or trust tier
+/// via the admin GUI and wants the new policy to take effect on the
+/// next inbound — without waiting for the lazy policy-version check
+/// (which only re-evaluates when `invoke_acp` is called, i.e. on the
+/// next user message). Without this endpoint, a quiet user could keep
+/// running with the old policy for hours.
+///
+/// Idempotent: returns 200 whether or not a session was active. The
+/// `killed` field tells the operator GUI which case happened.
+///
+/// In default (non-ACP) builds, ACP sessions don't exist — endpoint
+/// returns 200 with `killed: false` and a friendly note. We don't
+/// 404 because operators shouldn't need to know the build flavor to
+/// hit this safely.
+pub async fn post_kill_user_session(
+    Path(hash): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    validate_user_hash(&hash)?;
+    #[cfg(feature = "acp")]
+    let killed = crate::ai::claude::session::kill_session(&hash).await;
+    #[cfg(not(feature = "acp"))]
+    let killed = {
+        let _ = &hash; // suppress unused-variable warning in non-acp build
+        false
+    };
+    audit_routes("users.sessions.kill", Some(&hash), None);
+    Ok(Json(json!({
+        "ok": true,
+        "hash": hash,
+        "killed": killed,
+        "note": if cfg!(feature = "acp") {
+            "ACP session terminated (or none was active)"
+        } else {
+            "daemon built without --features acp; no long-running sessions to kill"
+        }
+    })))
+}
+
 // -------------------- test mode (inject + capture) --------------------
 
 /// Inject a synthetic inbound message through the full handler pipeline.

@@ -98,6 +98,36 @@ fn sessions() -> &'static SessionTable {
     T.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// v7.7 — immediate kill of a user's ACP session. Used by the admin
+/// API endpoint `POST /api/v1/users/{hash}/sessions/kill` to give
+/// operators a "stop this user's session right now" button — useful
+/// when investigating compromised accounts or applying urgent policy
+/// changes that can't wait for the lazy invalidate-on-next-invoke
+/// path.
+///
+/// Returns true if a session existed and was removed (its Drop impl
+/// fires `start_kill` on the claude child process). False if no
+/// session was active for this user — caller can return 200 either
+/// way (idempotent).
+///
+/// Removing from the table releases the last Arc, which drops the
+/// Mutex, which drops the `ClaudeAcpSession`, which fires
+/// `Drop::drop` → `child.start_kill()`. The kill is async (POSIX
+/// SIGTERM); if claude doesn't exit within tokio's default grace
+/// period the kernel will SIGKILL.
+pub async fn kill_session(user_hash: &str) -> bool {
+    let mut table = sessions().lock().await;
+    let existed = table.remove(user_hash).is_some();
+    if existed {
+        metrics::counter!(
+            "weclawbot_acp_respawn_total",
+            "reason" => "admin_kill"
+        )
+        .increment(1);
+    }
+    existed
+}
+
 /// v7.6 — compute a fingerprint of the current effective ToolPolicy
 /// for `user_hash`. Used by the ACP session table to detect when an
 /// operator changes the user's settings (or when their trust tier

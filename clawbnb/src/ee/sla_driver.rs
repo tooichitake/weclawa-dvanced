@@ -13,7 +13,7 @@
 //!   errors).
 //! - `covered_seconds` — fixed 300 (5min window).
 //!
-//! ## Phase 2 (v7.6 — opt-in via env): Prometheus-derived metrics
+//! ## Phase 2 + 3 (v7.6/v7.7 — opt-in via env): Prometheus-derived metrics
 //!
 //! When `WECLAWBOT_PROMETHEUS_URL` is set, the driver queries
 //! Prometheus for:
@@ -24,11 +24,12 @@
 //!   `sum(rate(...{status!="received"}[5m])) / sum(rate(...[5m]))`
 //!   → multiply by window_seconds → clamp.
 //!
-//! Phase 3 (TODO, future work): per-tenant `latency_p99_ms` requires
-//! adding a `tenant_id` label to the
-//! `weclawbot_api_request_duration_seconds` histogram. That's a
-//! schema change to the metrics-exporter-prometheus output, so it's
-//! deferred until we re-audit cardinality across all callers.
+//! - **v7.7 phase 3** — `latency_p99_ms`: derived from
+//!   `weclawbot_api_request_duration_per_tenant_seconds` histogram
+//!   (emitted from `service::auth::bearer_auth` only for authed
+//!   `/api/v1/*` paths so the cardinality stays bounded). Formula:
+//!   `histogram_quantile(0.99, sum by (le) (rate(..._bucket{tenant_id}[5m])))`
+//!   → seconds → millis.
 //!
 //! ## Scheduling
 //!
@@ -206,14 +207,29 @@ async fn compute_and_upsert(
             // during the window). PromQL composition:
             //   error_rate = sum(rate(...{status="error"})) / sum(rate(...))
             // We compute as a 5-min rate matching our window.
-            let q = format!(
+            let downtime_q = format!(
                 r#"sum(rate(weclawbot_inbound_messages_total{{tenant_id="{tenant_id}",status!="received"}}[5m]))
                    / sum(rate(weclawbot_inbound_messages_total{{tenant_id="{tenant_id}"}}[5m]))"#,
             );
-            let error_frac = prom.instant_scalar(&q).await.unwrap_or(0.0);
+            let error_frac = prom.instant_scalar(&downtime_q).await.unwrap_or(0.0);
             let downtime = (error_frac * WINDOW_SECONDS as f64).clamp(0.0, WINDOW_SECONDS as f64);
-            // Latency_p99 phase-3 (TODO: histogram tenant label).
-            (downtime as i32, 0i32)
+
+            // v7.7 — phase 3 latency_p99. Uses the per-tenant
+            // histogram added in `service::auth::bearer_auth`. PromQL:
+            //   histogram_quantile(
+            //     0.99,
+            //     sum by (le) (rate(weclawbot_api_request_duration_per_tenant_seconds_bucket{tenant_id=...}[5m]))
+            //   )
+            // The `_bucket` suffix is what metrics-exporter-prometheus
+            // emits for histogram series. Result is in seconds; we
+            // convert to ms (rounded i32) for the schema column.
+            // Empty data (no traffic in window) → 0.
+            let latency_q = format!(
+                r#"histogram_quantile(0.99, sum by (le) (rate(weclawbot_api_request_duration_per_tenant_seconds_bucket{{tenant_id="{tenant_id}"}}[5m])))"#,
+            );
+            let latency_s = prom.instant_scalar(&latency_q).await.unwrap_or(0.0);
+            let latency_ms = (latency_s * 1000.0).clamp(0.0, i32::MAX as f64) as i32;
+            (downtime as i32, latency_ms)
         } else {
             (0i32, 0i32)
         };

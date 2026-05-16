@@ -232,6 +232,21 @@ pub async fn run(foreground: bool, bind: &str, port: u16) -> Result<(), String> 
             sla_shutdown,
         );
         info!("sla_driver started (5min windows, 90d retention, phase-1 metrics)");
+
+        // v7.7 — opt-in Stripe Usage Records pusher. No-op when
+        // WECLAWBOT_STRIPE_API_KEY is unset; otherwise hourly post
+        // of cumulative counter values to per-tenant Stripe
+        // SubscriptionItems. See `stripe_usage_pusher` module doc
+        // for the per-tenant mapping schema and idempotency design.
+        let stripe_shutdown = shutdown_rx.clone();
+        let _stripe_handle =
+            crate::service::stripe_usage_pusher::spawn_stripe_usage_pusher(
+                pool.clone(),
+                stripe_shutdown,
+            );
+        info!(
+            "stripe_usage_pusher started (hourly, opt-in via WECLAWBOT_STRIPE_API_KEY)"
+        );
     }
 
     // v7.4 M4.1: trust scoring driver. Scores every active user every

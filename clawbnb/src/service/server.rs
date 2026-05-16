@@ -104,6 +104,12 @@ fn protected_routes() -> Router {
         .route("/users/{hash}/history", get(routes::get_user_history))
         .route("/users/{hash}/history", delete(routes::delete_user_history))
         .route("/users/{hash}/sync", post(routes::post_user_sync))
+        // v7.7 — immediate ACP session kill. Idempotent; safe to hit
+        // when no session is active; no-op in non-acp builds.
+        .route(
+            "/users/{hash}/sessions/kill",
+            post(routes::post_kill_user_session),
+        )
         .route("/users/{hash}", delete(routes::delete_user))
         .route("/claude/schema", get(routes::get_claude_schema))
         // Test injection is protected by Bearer auth on top of the

@@ -128,10 +128,34 @@ pub async fn invoke(
         generated_files: Vec::new(),
         generated_urls: Vec::new(),
         error_message: None,
-        // codex's stream-json format doesn't include a final `usage`
-        // event the same way claude does; once the codex shim emits
-        // one, the stream_json parser shared with claude will populate
-        // this — until then, no per-codex-call token billing.
+        // v7.6+ — token_usage extraction here is intentionally None.
+        //
+        // ## Why codex is different from claude
+        //
+        // claude-cli's stream-json includes a final `result` event with
+        // `usage: { input_tokens, output_tokens, ... }` which our
+        // shared parser at `crate::ai::claude::stream_json::process_event`
+        // populates into `ClaudeOutput::token_usage`. The codex CLI
+        // (OpenAI's `codex` binary) currently does NOT emit such an
+        // event — it just streams the completion text and exits. The
+        // OpenAI Responses API the codex CLI wraps DOES return usage
+        // in its non-stream payload, but the CLI doesn't surface it.
+        //
+        // ## Forward compatibility
+        //
+        // We use the same `process_event` for both claude and codex
+        // streams here (one parser, one shape contract). The moment
+        // upstream codex starts emitting a `result.usage` event in
+        // claude's shape, no daemon changes are needed — the parser
+        // auto-populates `token_usage` and `cli_provider`'s record
+        // path lights up. Until then, per-codex-call billing relies
+        // on the per-message + per-sandbox-seconds counters.
+        //
+        // Tracking: file a feature request against the codex CLI repo
+        // for `--emit-usage`. If they decline, we can do a post-call
+        // probe via the underlying Responses API — but that's a real
+        // implementation (separate HTTP call), so it'd live in a new
+        // `codex_usage.rs` module.
         token_usage: None,
     };
     // codex doesn't emit MCP tool calls; deliverable files (if any) go
